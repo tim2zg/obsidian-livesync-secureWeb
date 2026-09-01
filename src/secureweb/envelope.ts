@@ -152,10 +152,10 @@ export function createSecureWebFetch(config: SecureWebTransportConfig): typeof f
             if (init?.body) {
                 if (typeof init.body === 'string') {
                     bodyBytes = new TextEncoder().encode(init.body);
-                } else if (init.body instanceof Uint8Array) {
-                    bodyBytes = init.body;
                 } else if (init.body instanceof ArrayBuffer) {
                     bodyBytes = new Uint8Array(init.body);
+                } else if (ArrayBuffer.isView(init.body)) {
+                    bodyBytes = new Uint8Array(init.body.buffer, init.body.byteOffset, init.body.byteLength);
                 }
             }
 
@@ -206,7 +206,7 @@ export function createSecureWebFetch(config: SecureWebTransportConfig): typeof f
                     'Content-Type': 'application/octet-stream',
                     'X-Gateway-Envelope': '1',
                 },
-                body: sealedPayload,
+                body: sealedPayload as unknown as BodyInit,
             });
 
             return envelopeResponse;
