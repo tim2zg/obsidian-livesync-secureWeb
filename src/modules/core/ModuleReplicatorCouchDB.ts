@@ -4,6 +4,7 @@ import { LiveSyncCouchDBReplicator } from "@vrtmrz/livesync-commonlib/compat/rep
 import type { LiveSyncAbstractReplicator } from "@vrtmrz/livesync-commonlib/compat/replication/LiveSyncAbstractReplicator";
 import { AbstractModule } from "@/modules/AbstractModule";
 import type { LiveSyncCore } from "@/main";
+import { createSecureWebFetch } from "@/secureweb/envelope";
 
 export class ModuleReplicatorCouchDB extends AbstractModule {
     _anyNewReplicator(settingOverride: Partial<RemoteDBSettings> = {}): Promise<LiveSyncAbstractReplicator | false> {
@@ -12,6 +13,23 @@ export class ModuleReplicatorCouchDB extends AbstractModule {
         if (settings.remoteType == REMOTE_MINIO || settings.remoteType == REMOTE_P2P) {
             return Promise.resolve(false);
         }
+
+        // Detect if the remote URI is targeted through the SecureWeb envelope plane
+        const remoteUri = (settings.couchDB_URI || '').toLowerCase();
+        if (remoteUri.includes('/gateway/e2e-envelope') || remoteUri.startsWith('secureweb:')) {
+            const gatewayUrl = settings.couchDB_URI.replace('secureweb:', 'https:').replace('/gateway/e2e-envelope', '');
+            const secureFetch = createSecureWebFetch({
+                gatewayUrl: gatewayUrl || 'https://localhost:8080',
+                targetHost: 'couchdb.local',
+                passkeyToken: settings.couchDB_PASSWORD || undefined,
+            });
+            // Attach secure fetch handler to global window if running within Obsidian DOM context
+            if (typeof window !== 'undefined') {
+                const win = window as unknown as { __secureWebPouchFetch?: typeof fetch };
+                win.__secureWebPouchFetch = secureFetch;
+            }
+        }
+
         return Promise.resolve(new LiveSyncCouchDBReplicator(this.core));
     }
     _everyAfterResumeProcess(): Promise<boolean> {
