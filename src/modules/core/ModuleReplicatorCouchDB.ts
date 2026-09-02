@@ -23,10 +23,22 @@ export class ModuleReplicatorCouchDB extends AbstractModule {
                 targetHost: 'couchdb.local',
                 passkeyToken: settings.couchDB_PASSWORD || undefined,
             });
-            // Attach secure fetch handler to global window if running within Obsidian DOM context
+
+            // Attach secure fetch interceptor to global window if running within Obsidian DOM context
             if (typeof window !== 'undefined') {
-                const win = window as unknown as { __secureWebPouchFetch?: typeof fetch };
-                win.__secureWebPouchFetch = secureFetch;
+                const win = window as unknown as { __secureWebOriginalFetch?: typeof fetch };
+                if (!win.__secureWebOriginalFetch) {
+                    win.__secureWebOriginalFetch = window.fetch.bind(window);
+                }
+                const origFetch = win.__secureWebOriginalFetch;
+
+                window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+                    const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                    if (urlStr.includes('/gateway/e2e-envelope') || (gatewayUrl && urlStr.startsWith(gatewayUrl))) {
+                        return secureFetch(input, init);
+                    }
+                    return origFetch(input, init);
+                };
             }
         }
 
