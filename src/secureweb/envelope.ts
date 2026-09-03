@@ -244,7 +244,20 @@ export function createSecureWebFetch(config: SecureWebTransportConfig): typeof f
         const method = (init?.method || (typeof input === 'object' && 'method' in input ? input.method : 'GET') || 'GET').toUpperCase();
 
         const urlObj = new URL(urlStr);
-        const pathAndQuery = urlObj.pathname + urlObj.search;
+        // The full URL is <gateway>/gateway/e2e-envelope/<db>/<doc>…: the
+        // envelope endpoint prefix must NOT be part of the inner path that
+        // is sealed and dispatched to the terminator. Strip it so the
+        // gateway routes the opened envelope to the exact CouchDB surface
+        // the client intended.
+        const ENVELOPE_PREFIX = '/gateway/e2e-envelope';
+        let basePath = urlObj.pathname;
+        if (basePath.startsWith(ENVELOPE_PREFIX)) {
+            basePath = basePath.slice(ENVELOPE_PREFIX.length);
+        }
+        if (!basePath.startsWith('/')) {
+            basePath = '/' + basePath;
+        }
+        const pathAndQuery = basePath + urlObj.search;
 
         // Extract body bytes
         let bodyBytes = new Uint8Array(0);
