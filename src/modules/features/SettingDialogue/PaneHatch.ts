@@ -50,6 +50,7 @@ import {
     MetadataDocumentRepairResults,
     OfflineScanUnresolvedReasons,
     repairMetadataDocumentIdentity,
+    VaultScanResults,
     type MetadataDocumentIdentityIssue,
 } from "@vrtmrz/livesync-commonlib/compat/serviceFeatures/offlineScanner";
 import {
@@ -74,7 +75,7 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                     .setDisabled(false)
                     .onClick(() => {
                         this.closeSetting();
-                        eventHub.emitEvent(EVENT_REQUEST_RUN_DOCTOR, "you wanted(Thank you)!");
+                        eventHub.emitEvent(EVENT_REQUEST_RUN_DOCTOR, $msg("you wanted(Thank you)!"));
                     })
             );
         new Setting(paneEl)
@@ -292,7 +293,8 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                                 )) === repairAction,
                             repair: async (repairRequest) =>
                                 await repairMetadataDocumentIdentity(this.core, repairRequest),
-                            requestOrdinaryScan: async () => await this.services.vault.scanVault(true, false),
+                            requestOrdinaryScan: async () =>
+                                (await this.services.vault.scanVault(true, false)) === VaultScanResults.COMPLETED,
                         });
 
                         if (execution.status === MetadataIdentityRepairExecutions.CANCELLED) return;

@@ -1,4 +1,5 @@
 import type { Locator, Page } from "playwright";
+import { $msg } from "../../../src/common/translation.ts";
 import { evalObsidianJson } from "./cli.ts";
 import { captureObsidianDialogue, captureObsidianElement, withObsidianPage } from "./ui.ts";
 
@@ -18,6 +19,7 @@ export type SetupState = {
     endpoint: string;
     bucket: string;
     bucketPrefix: string;
+    useCustomRequestHandler: boolean;
     p2pEnabled: boolean;
     p2pRelays: string;
     p2pRoomId: string;
@@ -38,7 +40,12 @@ export function modalByTitle(page: Page, title: string): Locator {
 }
 
 export async function captureGuideDialogue(port: number, filename: string, title: string): Promise<string> {
-    return await captureObsidianElement(port, filename, (page) => modalByTitle(page, title).locator(".modal").first());
+    return await captureObsidianElement(
+        port,
+        filename,
+        (page) => modalByTitle(page, title).locator(".modal").first(),
+        uiTimeoutMs
+    );
 }
 
 export async function assertVerticalActionLayout(port: number, title: string): Promise<void> {
@@ -66,7 +73,8 @@ export async function enterSetupURI(
     port: number,
     mode: "new" | "existing",
     artifact: SetupArtifact,
-    captures: SetupCaptureNames
+    captures: SetupCaptureNames,
+    rejectedArtifacts: readonly SetupArtifact[] = []
 ): Promise<string> {
     await withObsidianPage(port, async (page) => {
         const invitation = page.locator(".notice").filter({ hasText: "Welcome to Self-hosted LiveSync" });
@@ -94,6 +102,40 @@ export async function enterSetupURI(
 
         const setup = modalByTitle(page, "Enter Setup URI");
         await setup.waitFor({ state: "visible", timeout: uiTimeoutMs });
+        const settingsSnapshot = () =>
+            page.evaluate(async () => {
+                const obsidian = globalThis as typeof globalThis & {
+                    app: {
+                        plugins: {
+                            plugins: Record<
+                                string,
+                                {
+                                    core: { services: { setting: { currentSettings(): unknown } } };
+                                    loadData(): Promise<unknown>;
+                                }
+                            >;
+                        };
+                    };
+                };
+                const plugin = obsidian.app.plugins.plugins["obsidian-livesync"];
+                return JSON.stringify({
+                    current: plugin.core.services.setting.currentSettings(),
+                    persisted: await plugin.loadData(),
+                });
+            });
+        const before = rejectedArtifacts.length > 0 ? await settingsSnapshot() : undefined;
+        for (const rejected of rejectedArtifacts) {
+            await setup.locator('input[placeholder^="obsidian://setuplivesync"]').fill(rejected.setupURI);
+            await setup.locator('input[name="password"]').fill(rejected.setupPassphrase);
+            await setup.getByRole("button", { name: "Test Settings and Continue" }).click({ timeout: uiTimeoutMs });
+            await setup.getByText($msg("Failed to parse Setup-URI."), { exact: false }).waitFor({
+                state: "visible",
+                timeout: uiTimeoutMs,
+            });
+            if ((await settingsSnapshot()) !== before) {
+                throw new Error("A rejected Setup URI changed the receiving device's settings.");
+            }
+        }
         await setup.locator('input[placeholder^="obsidian://setuplivesync"]').fill(artifact.setupURI);
         await setup.locator('input[name="password"]').fill(artifact.setupPassphrase);
     });
@@ -113,7 +155,8 @@ export async function enterSetupURI(
 export async function generateSetupURIFromDevice(
     port: number,
     setupPassphrase: string,
-    captures: SetupCaptureNames
+    captures: SetupCaptureNames,
+    mode: "ephemeral" | "persistent" = "ephemeral"
 ): Promise<{ artifact: SetupArtifact; screenshots: string[] }> {
     const opened = await withObsidianPage(port, async (page) => {
         return await page.evaluate(
@@ -143,6 +186,18 @@ export async function generateSetupURIFromDevice(
         const prompt = modalByTitle(page, promptTitle);
         await prompt.getByRole("button", { name: "OK", exact: true }).click({ timeout: uiTimeoutMs });
         await prompt.waitFor({ state: "hidden", timeout: uiTimeoutMs });
+        const choice = modalByTitle(page, "Setup URI availability");
+        await choice.waitFor({ state: "visible", timeout: uiTimeoutMs });
+        await choice.getByText("Time-bound Setup URIs can be opened until", { exact: false }).waitFor({
+            state: "visible",
+            timeout: uiTimeoutMs,
+        });
+        await choice
+            .getByRole("button", {
+                name: mode === "ephemeral" ? "Time-bound" : "Compatible (no time limit)",
+                exact: true,
+            })
+            .click({ timeout: uiTimeoutMs });
     });
 
     const resultTitle = "Your Setup URI is ready to be copied";
@@ -161,7 +216,7 @@ export async function generateSetupURIFromDevice(
     );
     await withObsidianPage(port, async (page) => {
         const result = modalByTitle(page, resultTitle);
-        await result.getByRole("button", { name: "OK", exact: true }).click({ timeout: uiTimeoutMs });
+        await result.getByRole("button", { name: $msg("Ok"), exact: true }).click({ timeout: uiTimeoutMs });
         await result.waitFor({ state: "hidden", timeout: uiTimeoutMs });
     });
 
@@ -182,16 +237,16 @@ export async function captureAndStartInitialisation(
         ? "Setup Complete: Preparing This P2P Device"
         : p2pAdditionalDevice
           ? "Setup Complete: Preparing to Fetch from Another Device"
-        : mode === "new"
-          ? "Setup Complete: Preparing to Initialise Server"
-          : "Setup Complete: Preparing to Fetch Synchronisation Data";
+          : mode === "new"
+            ? "Setup Complete: Preparing to Initialise Server"
+            : "Setup Complete: Preparing to Fetch Synchronisation Data";
     const button = p2pFirstDevice
         ? "Restart and Prepare This Device"
         : p2pAdditionalDevice
           ? "Restart and Select Source Device"
-        : mode === "new"
-          ? "Restart and Initialise Server"
-          : "Restart and Fetch Data";
+          : mode === "new"
+            ? "Restart and Initialise Server"
+            : "Restart and Fetch Data";
     if (p2pAdditionalDevice) {
         await withObsidianPage(port, async (page) => {
             const modal = modalByTitle(page, title);
@@ -348,6 +403,7 @@ export async function readSetupState(cliBinary: string, environment: NodeJS.Proc
             "endpoint:settings.endpoint||'',",
             "bucket:settings.bucket||'',",
             "bucketPrefix:settings.bucketPrefix||'',",
+            "useCustomRequestHandler:settings.useCustomRequestHandler===true,",
             "p2pEnabled:settings.P2P_Enabled===true,",
             "p2pRelays:settings.P2P_relays||'',",
             "p2pRoomId:settings.P2P_roomID||'',",
@@ -392,6 +448,15 @@ export async function finishInitialisation(
     let readySince: number | undefined;
     while (Date.now() < deadline) {
         const resumeVisible = await withObsidianPage(port, async (page) => {
+            const alignedSettingsNotice = page.locator(".modal-container").filter({
+                hasText:
+                    "Your settings differed slightly from the server's. The plug-in has supplemented the incompatible parts with the server settings!",
+            });
+            if (await alignedSettingsNotice.isVisible()) {
+                await alignedSettingsNotice
+                    .getByRole("button", { name: "OK", exact: true })
+                    .click({ timeout: uiTimeoutMs });
+            }
             return await modalByTitle(page, "Confirmation").filter({ hasText: message }).isVisible();
         }).catch(() => false);
         if (resumeVisible) {

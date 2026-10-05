@@ -15,6 +15,7 @@ const testSteps: Step[] = [
     { name: "smoke", args: ["run", "test:e2e:obsidian:smoke"] },
     { name: "onboarding invitation", args: ["run", "test:e2e:obsidian:onboarding-invitation"] },
     { name: "Svelte dialogue mounts", args: ["run", "test:e2e:obsidian:dialog-mounts"] },
+    { name: "conflict dialogue policy", args: ["run", "test:e2e:obsidian:conflict-dialog-policy"] },
     { name: "revision repair", args: ["run", "test:e2e:obsidian:revision-repair"] },
     { name: "settings UI", args: ["run", "test:e2e:obsidian:settings-ui"] },
     { name: "Review Harness", args: ["run", "test:e2e:obsidian:review-harness"] },
@@ -34,13 +35,27 @@ const testSteps: Step[] = [
         name: "Object Storage Setup URI workflow",
         args: ["run", "test:e2e:obsidian:object-storage-setup-uri-workflow"],
     },
+    {
+        name: "Object Storage Compatible Setup URI workflow",
+        args: ["run", "test:e2e:obsidian:object-storage-compatible-setup-uri-workflow"],
+    },
+    {
+        name: "Object Storage QR workflow",
+        args: ["run", "test:e2e:obsidian:object-storage-qr-workflow"],
+    },
+    {
+        name: "Object Storage Custom HTTP Handler Setup URI workflow",
+        args: ["run", "test:e2e:obsidian:object-storage-custom-http-handler-setup-uri-workflow"],
+    },
     { name: "P2P Setup URI workflow", args: ["run", "test:e2e:obsidian:p2p-setup-uri-workflow"] },
     { name: "startup scan", args: ["run", "test:e2e:obsidian:startup-scan"] },
     { name: "provisioned Setup URI workflow", args: ["run", "test:e2e:obsidian:setup-uri-workflow"] },
     { name: "two-vault synchronisation", args: ["run", "test:e2e:obsidian:two-vault-sync"] },
     { name: "hidden file snippet synchronisation", args: ["run", "test:e2e:obsidian:hidden-file-snippet-sync"] },
     { name: "Customisation Sync", args: ["run", "test:e2e:obsidian:customisation-sync"] },
+    { name: "internal Metadata Doctor", args: ["run", "test:e2e:obsidian:internal-metadata-doctor"] },
     { name: "setting Markdown export", args: ["run", "test:e2e:obsidian:setting-markdown-export"] },
+    { name: "setting Markdown round-trip", args: ["run", "test:e2e:obsidian:setting-markdown-roundtrip"] },
 ];
 
 const manageCouchDb = process.argv.includes("--manage-couchdb") || process.argv.includes("--manage-services");
