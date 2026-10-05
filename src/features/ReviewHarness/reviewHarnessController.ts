@@ -20,12 +20,8 @@ export interface ReviewHarnessRuntime {
     isCompatibilityReviewInitialised(): boolean;
     getCompatibilityPause(): CompatibilityPause | undefined;
     openCompatibilityReview(): Promise<void>;
-    getP2PComposition(): {
-        readonly first: unknown;
-        readonly second: unknown;
-        readonly expectedServices: unknown;
-    };
     runVaultRoundTrip(): Promise<ReviewHarnessScenarioResult>;
+    runIdBenchmark(): Promise<ReviewHarnessScenarioResult>;
     readContinuation(): string | null;
     writeContinuation(value: string): void;
     deleteContinuation(): void;
@@ -61,37 +57,6 @@ function initialResults(): Record<ReviewHarnessScenarioId, ReviewHarnessScenario
         ReviewHarnessScenarioId,
         ReviewHarnessScenarioResult
     >;
-}
-
-function inspectP2PComposition(input: ReturnType<ReviewHarnessRuntime["getP2PComposition"]>): ReviewHarnessScenarioResult {
-    if (input.first !== input.second) {
-        return {
-            status: "failed",
-            detail: "Two consecutive reads resolved different P2P replicators without a lifecycle transition.",
-            observations: [],
-        };
-    }
-    if (typeof input.first !== "object" || input.first === null) {
-        return {
-            status: "failed",
-            detail: "The P2P composition did not expose a current replicator.",
-            observations: [],
-        };
-    }
-    const env = "env" in input.first ? input.first.env : undefined;
-    const services = typeof env === "object" && env !== null && "services" in env ? env.services : undefined;
-    if (services !== input.expectedServices) {
-        return {
-            status: "failed",
-            detail: "The current P2P replicator is not bound to the active Obsidian services.",
-            observations: [],
-        };
-    }
-    return {
-        status: "passed",
-        detail: "The live P2P result resolves the current replicator and active Obsidian services.",
-        observations: [],
-    };
 }
 
 export class ReviewHarnessController {
@@ -163,9 +128,7 @@ export class ReviewHarnessController {
     }
 
     async runAutomaticScenarios(): Promise<void> {
-        for (const id of ["settings-lifecycle", "p2p-composition"] as const) {
-            await this.runScenario(id);
-        }
+        await this.runScenario("settings-lifecycle");
     }
 
     async runAllScenarios(): Promise<void> {
@@ -195,10 +158,10 @@ export class ReviewHarnessController {
                     settings: this.runtime.getSettings(),
                     newVaultSettings: this.runtime.getNewVaultSettings(),
                 });
-            } else if (id === "p2p-composition") {
-                result = inspectP2PComposition(this.runtime.getP2PComposition());
             } else if (id === "vault-round-trip") {
                 result = await this.runtime.runVaultRoundTrip();
+            } else if (id === "id-generation-performance") {
+                result = await this.runtime.runIdBenchmark();
             } else {
                 const inspection = this.inspectCompatibilityReview();
                 result =
@@ -246,10 +209,7 @@ export class ReviewHarnessController {
                             detail: "The device-local compatibility review remains pending.",
                             observations: inspection.observations,
                         };
-            this.record(
-                "compatibility-review-updated",
-                this.results["compatibility-review"].status
-            );
+            this.record("compatibility-review-updated", this.results["compatibility-review"].status);
         } catch (error) {
             this.setUnexpectedFailure("compatibility-review", error);
         } finally {
@@ -299,6 +259,7 @@ export class ReviewHarnessController {
                 mode,
                 status: this.results[id].status,
                 detail: this.results[id].detail,
+                observations: this.results[id].observations,
             })),
             transcript: this.transcript,
         });

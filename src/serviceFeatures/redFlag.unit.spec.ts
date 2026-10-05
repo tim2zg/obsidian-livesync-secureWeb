@@ -19,9 +19,11 @@ import {
     flagHandlerToEventHandler,
 } from "./redFlag";
 import {
+    DEFAULT_SETTINGS,
     TweakValuesRecommendedTemplate,
     TweakValuesShouldMatchedTemplate,
     TweakValuesTemplate,
+    type TweakValues,
 } from "@vrtmrz/livesync-commonlib/compat/common/types";
 import {
     ExtraOnLocal,
@@ -769,6 +771,24 @@ describe("Red Flag Feature", () => {
     });
 
     describe("askAndPerformFastSetupOnScheduledFetchAll", () => {
+        it("uses the detailed flow instead of Simple Fetch while remediation mode is active", async () => {
+            const host = createHostMock();
+            const log = createLoggerMock();
+            const cleanupFlag = vi.fn().mockResolvedValue(undefined);
+
+            Object.assign(host.mocks.setting.settings, {
+                maxMTimeForReflectEvents: Date.parse("2026-09-01T00:00:00Z"),
+            });
+
+            await expect(askAndPerformFastSetupOnScheduledFetchAll(host as any, log, cleanupFlag)).resolves.toBe(
+                undefined
+            );
+
+            expect(host.mocks.ui.confirm.confirmWithMessage).not.toHaveBeenCalled();
+            expect(host.mocks.setting.deleteSmallConfig).toHaveBeenCalledWith("simple-fetch-mode");
+            expect(cleanupFlag).not.toHaveBeenCalled();
+        });
+
         it("releases both reflection suspensions after Fast Setup succeeds", async () => {
             const host = createHostMock();
             const log = createLoggerMock();
@@ -1149,6 +1169,53 @@ describe("Red Flag Feature", () => {
     });
 
     describe("Remote configuration adjustment", () => {
+        it("compatibility: preserves the local filename-case value when the remote omits it", async () => {
+            const host = createHostMock();
+            const config = {
+                ...DEFAULT_SETTINGS,
+                ...TweakValuesShouldMatchedTemplate,
+                handleFilenameCaseSensitive: false,
+            };
+            const remote: TweakValues = { ...TweakValuesShouldMatchedTemplate };
+            delete remote.handleFilenameCaseSensitive;
+            host.mocks.tweakValue.fetchRemotePreferred.mockResolvedValueOnce(availableRemoteTweaks(remote));
+
+            await adjustSettingToRemote(host as any, createLoggerMock(), config);
+
+            expect(host.mocks.ui.confirm.askSelectStringDialogue).not.toHaveBeenCalled();
+            expect(host.mocks.setting.applyExternalSettings).toHaveBeenCalledWith(
+                expect.objectContaining({ handleFilenameCaseSensitive: false }),
+                true
+            );
+        });
+
+        it("keeps this device's E2EE settings when preparing to overwrite the remote", async () => {
+            const host = createHostMock();
+            Object.assign(host.mocks.setting.settings, TweakValuesShouldMatchedTemplate, {
+                encrypt: true,
+                passphrase: "local-encryption-passphrase",
+            });
+            host.mocks.tweakValue.fetchRemotePreferred.mockResolvedValueOnce(
+                availableRemoteTweaks({
+                    ...TweakValuesShouldMatchedTemplate,
+                    encrypt: false,
+                })
+            );
+
+            const result = await adjustSettingToRemote(
+                host as any,
+                createLoggerMock(),
+                host.mocks.setting.currentSettings(),
+                "rebuild"
+            );
+
+            expect(result).toBe(true);
+            expect(host.mocks.tweakValue.fetchRemotePreferred).toHaveBeenCalledOnce();
+            expect(host.mocks.setting.currentSettings().encrypt).toBe(true);
+            expect(host.mocks.setting.currentSettings().passphrase).toBe("local-encryption-passphrase");
+            expect(host.mocks.setting.applyExternalSettings).not.toHaveBeenCalled();
+        });
+
         it("should skip remote configuration fetch when preventFetchingConfig is true", async () => {
             const host = createHostMock();
             const config = { preventFetchingConfig: true } as any;
@@ -1855,8 +1922,15 @@ describe("Red Flag Feature", () => {
         it("should handle rebuildAll flag with flagHandlerToEventHandler", async () => {
             const host = createHostMock();
             const log = createLoggerMock();
+            Object.assign(host.mocks.setting.settings, TweakValuesShouldMatchedTemplate, {
+                encrypt: true,
+                passphrase: "local-encryption-passphrase",
+            });
             host.mocks.tweakValue.fetchRemotePreferred.mockResolvedValueOnce(
-                availableRemoteTweaks({ customChunkSize: 1 })
+                availableRemoteTweaks({
+                    ...TweakValuesShouldMatchedTemplate,
+                    encrypt: false,
+                })
             );
 
             host.mocks.storageAccess.files.add(FlagFilesOriginal.REBUILD_ALL);
@@ -1868,6 +1942,8 @@ describe("Red Flag Feature", () => {
             await Promise.resolve(eventHandler());
             await new Promise((resolve) => setTimeout(resolve, 10));
             expect(host.mocks.rebuilder.$rebuildEverything).toHaveBeenCalled();
+            expect(host.mocks.setting.currentSettings().encrypt).toBe(true);
+            expect(host.mocks.setting.applyExternalSettings).not.toHaveBeenCalled();
 
             expect(host.mocks.ui.dialogManager.openWithExplicitCancel).toHaveBeenCalled();
         });

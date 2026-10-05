@@ -48,7 +48,7 @@ CLI Main
     - Settings management (JSON file)
     - Graceful shutdown handling
 
-## Usage
+## Command overview
 
 The CLI operates on a **database directory** which contains PouchDB data and settings.
 
@@ -71,6 +71,9 @@ livesync-cli [database-path] [command] [args...]
     - `init-settings` writes its target file. `setup`, `remote-add`, `remote-rm`, `remote-set`, and `remote-activate` write their settings changes without this option.
     - All remaining commands leave the settings file unchanged by default.
     - Temporary values used to suspend synchronisation or select a remote for one command are never written.
+- `--compat-remote-admin-exit-zero`: Preserve the former zero exit code when `mark-resolved`, `lock-remote`, or `unlock-remote` returns a provider verification failure.
+    - Without this option, those commands return a non-zero exit code when verification fails.
+    - Invalid arguments, unknown remote IDs, and errors thrown while activating or mutating the remote remain errors with or without this option.
 
 ### Commands
 
@@ -95,6 +98,8 @@ livesync-cli [database-path] [command] [args...]
 - `lock-remote [remote-id]`: Lock the remote database.
 - `remote-status [remote-id]`: Show remote database status.
 - `init-settings [file]`: Create a default settings file.
+
+Remote-administration commands verify the resulting milestone state through the selected provider. The existing `[Verification]` lines remain suitable for scripts which inspect command output, while the default exit code now reflects whether that verification succeeded.
 
 ### Examples
 
@@ -145,6 +150,46 @@ npm run cli -- [database-path] [command] [args...]
 # Run the built executable directly
 node src/apps/cli/dist/index.cjs [database-path] [command] [args...]
 ```
+
+### systemd installation
+
+The `deploy/` directory contains a systemd unit template and an install script.
+
+**Automated installation (user service, recommended):**
+
+```bash
+bash src/apps/cli/deploy/install.sh --vault /path/to/vault
+```
+
+**With a polling interval:**
+
+```bash
+bash src/apps/cli/deploy/install.sh --vault /path/to/vault --interval 60
+```
+
+**System-wide installation** (requires root or `sudo` for `/etc/systemd/system/`):
+
+```bash
+bash src/apps/cli/deploy/install.sh --system --vault /path/to/vault
+```
+
+The script:
+
+1. Installs the repository dependencies and builds the CLI.
+2. Installs the complete CLI bundle and its production dependencies under `~/.local/lib/livesync-cli` (user) or `/usr/local/lib/livesync-cli` (system), then checks that the installed CLI can start.
+3. Installs the command wrapper as `~/.local/bin/livesync-cli` (user) or `/usr/local/bin/livesync-cli` (system).
+4. Writes the unit file to `~/.config/systemd/user/livesync-cli.service` (user) or `/etc/systemd/system/livesync-cli.service` (system).
+5. Reloads systemd, enables and starts the service, and reports success only after confirming that the service remains active.
+
+Ensure that `~/.local/bin` for a user installation, or `/usr/local/bin` for a system-wide installation, is on the shell's `PATH` before invoking `livesync-cli` interactively. For example, add the following to the appropriate shell start-up file for a user installation when needed:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The generated systemd unit uses the wrapper's absolute path and does not depend on the shell's `PATH`.
+
+**Manual setup** — if you prefer to manage the unit yourself, copy `deploy/livesync-cli.service`, replace `LIVESYNC_BIN` and `LIVESYNC_VAULT_PATH` with the actual binary path and Vault path, then install it in the appropriate systemd directory.
 
 ### Docker
 
@@ -205,7 +250,9 @@ candidate carries the host's public IP and peers can connect normally.
 
 ### Adding `livesync-cli` alias
 
-To use the `livesync-cli` command globally, you can add an alias to your shell configuration file (e.g., `.zshrc` or `.bashrc`).
+If you used the [systemd installer](#systemd-installation), no alias is required: it installs the `livesync-cli` wrapper in `~/.local/bin` or `/usr/local/bin`. If the installed command is not found, follow the `PATH` guidance in the systemd installation section.
+
+The aliases below are only for running the CLI from a source checkout, or from Docker without using the installer. Add the appropriate alias to your shell configuration file, such as `.zshrc` or `.bashrc`.
 
 If you are using `npm run`, add the following line:
 
@@ -338,6 +385,8 @@ Options:
   --interval <N>, -i <N>  (daemon only) Poll CouchDB every N seconds instead of using the _changes feed
   --vault <path>, -V <path>  (daemon/mirror) Path to vault directory, decoupled from database-path
   --write-settings         Write setting changes after a successful command
+  --compat-remote-admin-exit-zero
+                           Preserve the former zero exit code when remote-administration verification fails
   --help, -h              Show this help message
 
 Commands:
@@ -498,36 +547,6 @@ import: .gitignore
 Patterns apply in both directions: the chokidar watcher will not emit events for matched files, and the `isTargetFile` filter will exclude them from CouchDB → local sync.
 
 Changes to this file require a daemon restart to take effect.
-
-### Systemd Installation
-
-The `deploy/` directory contains a systemd unit template and an install script.
-
-**Automated install (user service, recommended):**
-
-```bash
-bash src/apps/cli/deploy/install.sh --vault /path/to/vault
-```
-
-**With polling interval:**
-
-```bash
-bash src/apps/cli/deploy/install.sh --vault /path/to/vault --interval 60
-```
-
-**System-wide install** (requires root / sudo for `/etc/systemd/system/`):
-
-```bash
-bash src/apps/cli/deploy/install.sh --system --vault /path/to/vault
-```
-
-The script:
-1. Builds the CLI (`npm install` + `npm run build`).
-2. Installs the binary to `~/.local/bin/livesync-cli` (user) or `/usr/local/bin/livesync-cli` (system).
-3. Writes the unit file to `~/.config/systemd/user/livesync-cli.service` (user) or `/etc/systemd/system/livesync-cli.service` (system).
-4. Runs `systemctl [--user] daemon-reload && systemctl [--user] enable --now livesync-cli`.
-
-**Manual setup** — if you prefer to manage the unit yourself, copy `deploy/livesync-cli.service`, replace `LIVESYNC_BIN` and `LIVESYNC_VAULT_PATH` with the actual binary path and vault path, then install to the appropriate systemd directory.
 
 ### Planned options:
 

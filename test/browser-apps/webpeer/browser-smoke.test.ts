@@ -52,6 +52,37 @@ Deno.test({
             assertEquals(await page.getByPlaceholder("Enter TURN username").inputValue(), "browser-turn-user");
             assertEquals(await page.getByPlaceholder("Enter TURN credential").inputValue(), "browser-turn-credential");
             assertEquals(await page.getByRole("button", { name: "Connect", exact: true }).isVisible(), true);
+
+            await page.getByLabel("TURN configuration", { exact: true }).selectOption("CF");
+            assertEquals(await saveTurn.isDisabled(), true);
+            await page.getByLabel("TURN Key ID", { exact: true }).fill("browser-turn-key");
+            const tokenField = page.getByLabel("TURN Key API Token", { exact: true });
+            assertEquals(await tokenField.getAttribute("type"), "password");
+            await tokenField.fill("browser-api-token");
+            await saveTurn.click();
+            await waitFor(async () => await saveTurn.isDisabled(), "WebPeer did not save its managed TURN profile");
+            assertEquals(await page.getByPlaceholder("anything-you-like").inputValue(), "browser-e2e-room");
+            await page.reload();
+            await page.getByRole("heading", { name: "Peer to Peer Replicator", exact: true }).waitFor();
+            assertEquals(await page.getByPlaceholder("anything-you-like").inputValue(), "browser-e2e-room");
+            await page.getByText("Optional TURN server settings", { exact: true }).click();
+            assertEquals(await page.getByLabel("TURN configuration", { exact: true }).inputValue(), "CF");
+            assertEquals(await page.getByLabel("TURN Key ID", { exact: true }).inputValue(), "browser-turn-key");
+            assertEquals(
+                await page.getByLabel("TURN Key API Token", { exact: true }).inputValue(),
+                "browser-api-token"
+            );
+            await page.getByPlaceholder("iphone-16").fill("browser-e2e-peer-renamed");
+            await save.click();
+            await waitFor(async () => await save.isDisabled(), "WebPeer did not save its updated device name");
+            assertEquals(await page.getByLabel("TURN configuration", { exact: true }).inputValue(), "CF");
+            assertEquals(
+                await page.getByLabel("TURN Key API Token", { exact: true }).inputValue(),
+                "browser-api-token"
+            );
+            await page.getByLabel("TURN configuration", { exact: true }).selectOption("");
+            assertEquals(await page.getByPlaceholder("Enter TURN username").inputValue(), "browser-turn-user");
+            assertEquals(await page.getByPlaceholder("Enter TURN credential").inputValue(), "browser-turn-credential");
             assertNoPageFailures();
         } finally {
             await browser.close();
@@ -131,6 +162,44 @@ Deno.test({
                 } finally {
                     await page.close();
                 }
+            }
+        } finally {
+            await browser.close();
+            await server.close();
+        }
+    },
+});
+
+Deno.test({
+    name: "WebPeer: an imported device can still be checked after its Setup URI window ends",
+    sanitizeOps: false,
+    sanitizeResources: false,
+    async fn() {
+        const server = await startStaticServer(webPeerDist);
+        const browser = await chromium.launch({ headless: true });
+        try {
+            const page = await browser.newPage();
+            try {
+                await page.goto(`${server.baseUrl}check.html`);
+                await page.getByRole("button", { name: "Prepare desktop check", exact: true }).click();
+                await page.getByAltText("Setup URI QR code for the desktop check", { exact: true }).waitFor();
+
+                // The target device has imported the URI; only the browser monitor is still pending.
+                await page.evaluate(() => {
+                    const originalNow = Date.now;
+                    Date.now = () => originalNow() + 8 * 24 * 60 * 60 * 1_000;
+                    window.dispatchEvent(new Event("focus"));
+                });
+                await page.getByText(/This Setup URI is outside its time window/).first().waitFor();
+
+                assertEquals(await page.getByLabel("Setup URI", { exact: true }).count(), 0);
+                assertEquals(await page.getByAltText("Setup URI QR code for the desktop check").count(), 0);
+                assertEquals(
+                    await page.getByRole("button", { name: "Start connection monitor", exact: true }).isEnabled(),
+                    true
+                );
+            } finally {
+                await page.close();
             }
         } finally {
             await browser.close();

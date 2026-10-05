@@ -129,6 +129,7 @@ Check and convert non-path-obfuscated files: Check and convert non-path-obfuscat
 Check for documents that have not been converted to path-obfuscated IDs and convert them if necessary.:
     Check for documents that have not been converted to path-obfuscated IDs and
     convert them if necessary.
+Check server requirements: Check server requirements
 Checking connection... Please wait.: Checking connection... Please wait.
 Chunks: Chunks
 Close: Close
@@ -158,6 +159,7 @@ Configure And Change Remote: Configure And Change Remote
 Configure E2EE: Configure E2EE
 Configure Remote: Configure Remote
 Connect: Connect
+Connect to existing database and continue: Connect to existing database and continue
 "Connected to Signaling Server (as Peer ID: ${peerId})": "Connected to Signaling Server (as Peer ID: ${peerId})"
 "Connected:": "Connected:"
 Connection Settings: Connection Settings
@@ -167,7 +169,11 @@ Copy: Copy
 Copy Report to clipboard: Copy Report to clipboard
 CouchDB Configuration: CouchDB Configuration
 CouchDB Connection Tweak: CouchDB Connection Tweak
+CouchDB validates the database name when you connect. The name must not be empty.:
+    CouchDB validates the database name when you connect. The name must not be
+    empty.
 Create P2P remote: Create P2P remote
+Create or connect to database and continue: Create or connect to database and continue
 Cross-platform: Cross-platform
 "Current adapter: {adapter}": "Current adapter: {adapter}"
 Custom Headers: Custom Headers
@@ -340,6 +346,7 @@ Encryption phassphrase. If changed, you should overwrite the server's database w
 End-to-End Encryption: End-to-End Encryption
 Endpoint URL: Endpoint URL
 Enhance chunk size: Enhance chunk size
+Enter a complete HTTP or HTTPS URL.: Enter a complete HTTP or HTTPS URL.
 Enter a folder prefix (optional): Enter a folder prefix (optional)
 Enter Setup URI: Enter Setup URI
 Enter TURN credential: Enter TURN credential
@@ -362,6 +369,7 @@ Export: Export
 "Failed to connect to the server: ${reason}": "Failed to connect to the server: ${reason}"
 Failed to connect to the server. Please check your settings.: Failed to connect to the server. Please check your settings.
 "Failed to connect to the signalling relay: ${reason}": "Failed to connect to the signalling relay: ${reason}"
+The connection test cannot add a signalling relay while P2P is active. Use the active relay settings, or disconnect P2P before testing.: The connection test cannot add a signalling relay while P2P is active. Use the active relay settings, or disconnect P2P before testing.
 Failed to create replicator instance.: Failed to create replicator instance.
 Failed to parse Setup-URI.: Failed to parse Setup-URI.
 "Failed:": "Failed:"
@@ -401,6 +409,7 @@ Hidden file synchronization have been temporarily disabled. Please enable them a
 Hidden Files: Hidden Files
 Hide completely: Hide completely
 Hide not applicable items: Hide not applicable items
+Hide password: Hide password
 Higher (${local} > ${remote}): Higher (${local} > ${remote})
 Highlight diff: Highlight diff
 How to display network errors when the sync server is unreachable.: How to display network errors when the sync server is unreachable.
@@ -723,6 +732,9 @@ moduleLiveSyncMain:
 moduleLocalDatabase:
     logWaitingForReady: Waiting for ready...
 moduleLog:
+    pathComponentTooLong: >-
+        This path contains a file or folder name longer than ${maxBytes} UTF-8
+        bytes. It may not work on some Android and Linux file systems.
     showLog: Show Log
 moduleMigration:
     fix0256:
@@ -1487,7 +1499,11 @@ Save and Apply: Save and Apply
 Save settings to a markdown file. You will be notified when new settings arrive. You can set different files by the platform.:
     Save settings to a markdown file. You will be notified when new settings
     arrive. You can set different files by the platform.
+Save without connecting: Save without connecting
 Saving will be performed forcefully after this number of seconds.: Saving will be performed forcefully after this number of seconds.
+Saving without a successful connection test keeps this profile, but automatic synchronisation may fail until the connection is corrected.:
+    Saving without a successful connection test keeps this profile, but
+    automatic synchronisation may fail until the connection is corrected.
 Scan changes: Scan changes
 Scan changes on customization sync: Scan changes on customization sync
 Scan customization automatically: Scan customization automatically
@@ -1749,6 +1765,7 @@ Sync: Sync
 Sync once: Sync once
 Syncing...: Syncing...
 Test Settings and Continue: Test Settings and Continue
+Test connection and save: Test connection and save
 The connection to the server has been configured successfully. As the next step,:
     The connection to the server has been configured successfully. As the next
     step,
@@ -1799,6 +1816,7 @@ Show full banner: Show full banner
 Show history: Show history
 Show icon only: Show icon only
 Show only notifications: Show only notifications
+Show password: Show password
 Show status as icons only: Show status as icons only
 Show status icon instead of file warnings banner: Show status icon instead of file warnings banner
 Show status inside the editor: Show status inside the editor
@@ -1875,9 +1893,17 @@ This can isolate your connections between devices. Use the same Room ID for the 
     the same devices.
 This device: This device
 This device name: This device name
+This first setup has several short steps because it confirms encryption, the connection method, and which device provides the initial data. Once it is complete, additional devices can reuse a Setup URI.:
+    This first setup has several short steps because it confirms encryption,
+    the connection method, and which device provides the initial data. Once it
+    is complete, additional devices can reuse a Setup URI.
 This is an extremely powerful operation. We strongly recommend that you copy your Vault folder to a safe location.:
     This is an extremely powerful operation. We strongly recommend that you copy
     your Vault folder to a safe location.
+This optional check uses Obsidian's internal request API and sends the credentials above to the CouchDB server. Use it only with a server you trust; administrator access may be required.:
+    This optional check uses Obsidian's internal request API and sends the
+    credentials above to the CouchDB server. Use it only with a server you
+    trust; administrator access may be required.
 This passphrase will not be copied to another device. It will be set to `Default` until you configure it again.:
     This passphrase will not be copied to another device. It will be set to
     `Default` until you configure it again.
@@ -2070,7 +2096,7 @@ xxhash64 (Fastest): xxhash64 (Fastest)
 "I am setting this up for the first time": "I am setting this up for the first time"
 "(Select this if you are configuring this device as the first synchronisation device.) This option is suitable if you are new to LiveSync and want to set it up from scratch.": "(Select this if you are configuring this device as the first synchronisation device.) This option is suitable if you are new to LiveSync and want to set it up from scratch."
 "I am adding a device to an existing synchronisation setup": "I am adding a device to an existing synchronisation setup"
-"(Select this if you are already using synchronisation on another computer or smartphone.) This option is suitable if you are new to LiveSync and want to set it up from scratch.": "(Select this if you are already using synchronisation on another computer or smartphone.) This option is suitable if you are new to LiveSync and want to set it up from scratch."
+"(Select this if you already have another synchronising device.) This option adds this device to the same synchronisation.": "(Select this if you already have another synchronising device.) This option adds this device to the same synchronisation."
 "Yes, I want to set up a new synchronisation": "Yes, I want to set up a new synchronisation"
 "Yes, I want to add this device to my existing synchronisation": "Yes, I want to add this device to my existing synchronisation"
 "No, please take me back": "No, please take me back"
@@ -2103,6 +2129,8 @@ xxhash64 (Fastest): xxhash64 (Fastest)
 "This feature enables direct synchronisation between devices. No server is required, but both devices must be online at the same time for synchronisation to occur, and some features may be limited. Internet connection is only required to signalling (detecting peers) and not for data transfer.": "This feature enables direct synchronisation between devices. No server is required, but both devices must be online at the same time for synchronisation to occur, and some features may be limited. Internet connection is only required to signalling (detecting peers) and not for data transfer."
 Ui:
     Common:
+        LocalDatabaseInitialisationFailed: Self-hosted LiveSync cannot synchronise. Generate a report to review the detailed log.
+        SomeFilesCouldNotBeSynchronised: Not all files could be synchronised. Check the affected files. Generate a report to review the detailed log.
         Signal:
             Caution: CAUTION
             Danger: DANGER
@@ -2418,6 +2446,7 @@ Ui:
             Title: Choose a synchronisation remote
 
 You can configure in the Obsidian Plugin Settings.: You can configure in the Obsidian Plugin Settings.
+"you wanted(Thank you)!": "you wanted(Thank you)!"
 
 You should create a new synchronisation destination and rebuild your data there.:
     You should create a new synchronisation destination and rebuild your data

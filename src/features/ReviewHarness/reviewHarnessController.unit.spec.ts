@@ -43,8 +43,6 @@ function createRuntime(): ReviewHarnessRuntime & {
     continuation: string | null;
     events: string[];
 } {
-    const services = {};
-    const replicator = { env: { services } };
     const runtime: ReviewHarnessRuntime & {
         compatibilityReviewInitialised: boolean;
         compatibilityPause: CompatibilityPause | undefined;
@@ -77,11 +75,15 @@ function createRuntime(): ReviewHarnessRuntime & {
             runtime.events.push("open-compatibility-review");
             runtime.compatibilityPause = undefined;
         }),
-        getP2PComposition: () => ({ first: replicator, second: replicator, expectedServices: services }),
         runVaultRoundTrip: vi.fn(async () => ({
             status: "passed" as const,
             detail: "The owned fixture tree was exercised and removed.",
             observations: [],
+        })),
+        runIdBenchmark: vi.fn(async () => ({
+            status: "passed" as const,
+            detail: "ID generation measurements completed.",
+            observations: ["Chunk 256 B: 1000 IDs total=43.00 ms; per ID=0.0430 ms"],
         })),
         readContinuation() {
             return this.continuation;
@@ -110,14 +112,13 @@ function createRuntime(): ReviewHarnessRuntime & {
 }
 
 describe("ReviewHarnessController", () => {
-    it("runs the automatic settings and P2P composition checks", async () => {
+    it("runs the automatic settings check", async () => {
         const runtime = createRuntime();
         const controller = new ReviewHarnessController(runtime);
 
         await controller.runAutomaticScenarios();
 
         expect(controller.snapshot().results["settings-lifecycle"].status).toBe("passed");
-        expect(controller.snapshot().results["p2p-composition"].status).toBe("passed");
         expect(controller.snapshot().results["vault-round-trip"].status).toBe("idle");
         expect(controller.snapshot().results["compatibility-review"].status).toBe("idle");
     });
@@ -154,6 +155,60 @@ describe("ReviewHarnessController", () => {
         expect(runtime.reportError).toHaveBeenCalledOnce();
     });
 
+    it("runs ID measurements on request and includes their units in the copied report", async () => {
+        const runtime = createRuntime();
+        const controller = new ReviewHarnessController(runtime);
+
+        await controller.runAutomaticScenarios();
+        expect(runtime.runIdBenchmark).not.toHaveBeenCalled();
+
+        await controller.runScenario("id-generation-performance");
+        await controller.copyReport();
+
+        expect(runtime.runIdBenchmark).toHaveBeenCalledOnce();
+        expect(controller.snapshot().results["id-generation-performance"].status).toBe("passed");
+        expect(vi.mocked(runtime.copyText).mock.calls[0][0]).toContain("1000 IDs total=43.00 ms; per ID=0.0430 ms");
+        expect(runtime.runVaultRoundTrip).not.toHaveBeenCalled();
+        expect(runtime.events).toEqual([]);
+        expect(runtime.continuation).toBeNull();
+    });
+
+    it("excludes an unexpected measurement error from the copied report", async () => {
+        const runtime = createRuntime();
+        runtime.runIdBenchmark = vi.fn().mockRejectedValue(new Error("private measurement error"));
+        const controller = new ReviewHarnessController(runtime);
+
+        await controller.runScenario("id-generation-performance");
+
+        expect(controller.snapshot().results["id-generation-performance"].status).toBe("failed");
+        expect(controller.createReport()).not.toContain("private measurement error");
+        expect(runtime.reportError).toHaveBeenCalledOnce();
+    });
+
+    it("does not overlap an ID measurement with another scenario", async () => {
+        const runtime = createRuntime();
+        let finish!: () => void;
+        const pending = new Promise<void>((resolve) => {
+            finish = resolve;
+        });
+        runtime.runIdBenchmark = vi.fn(async () => {
+            await pending;
+            return { status: "passed" as const, detail: "Measured", observations: [] };
+        });
+        const controller = new ReviewHarnessController(runtime);
+
+        const running = controller.runScenario("id-generation-performance");
+        await controller.runScenario("id-generation-performance");
+        await controller.runScenario("vault-round-trip");
+
+        expect(runtime.runIdBenchmark).toHaveBeenCalledOnce();
+        expect(runtime.runVaultRoundTrip).not.toHaveBeenCalled();
+        expect(controller.snapshot().running).toBe(true);
+        finish();
+        await running;
+        expect(controller.snapshot().running).toBe(false);
+    });
+
     it("deletes a one-shot continuation before exposing the resumed guided step", () => {
         const runtime = createRuntime();
         runtime.continuation = JSON.stringify({
@@ -171,9 +226,7 @@ describe("ReviewHarnessController", () => {
         expect(controller.snapshot().results["compatibility-review"]).toMatchObject({
             status: "waiting-for-user",
         });
-        expect(controller.snapshot().resumedRequestId).toBe(
-            "compatibility-review-2026-07-18T11:59:00.000Z"
-        );
+        expect(controller.snapshot().resumedRequestId).toBe("compatibility-review-2026-07-18T11:59:00.000Z");
     });
 
     it("does not copy rejected continuation values into the report", () => {

@@ -50,11 +50,16 @@
     Your {title || "data"} has been copied to the clipboard.
 </InfoNote>
 <UserDecisions>
-    <Decision title="OK" important={true} {commit} />
+    <Decision title={translateMessage("Ok")} important={true} {commit} />
 </UserDecisions>
 
 <style>
     textarea {
         resize: none;
+    }
+
+    button {
+        min-width: 44px;
+        min-height: 44px;
     }
 </style>
