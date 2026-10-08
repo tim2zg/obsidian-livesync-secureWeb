@@ -1,4 +1,6 @@
 <script lang="ts">
+    import TurnConfiguration from "@/features/P2PSync/TurnConfiguration.svelte";
+    import { validateManagedTurnSettings } from "@/integrations/turnSettings";
     // import { delay } from "octagonal-wheels/promises";
     import DialogHeader from "@/modules/services/LiveSyncUI/components/DialogHeader.svelte";
     import Guidance from "@/modules/services/LiveSyncUI/components/Guidance.svelte";
@@ -15,7 +17,7 @@
         P2PMessageSizePresets,
         PREFERRED_BASE,
         RemoteTypes,
-        hasValidP2PTurnServerUrl,
+        hasP2PTurnConfiguration,
         normaliseP2PConnectionPath,
         normaliseP2PMaxWirePayloadBytes,
         type EntryDoc,
@@ -27,7 +29,6 @@
     import { TrysteroReplicator } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/TrysteroReplicator";
     import type { ReplicatorHostEnv } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/types";
     import {
-        copyTo,
         generateP2PRoomId,
         pickP2PSyncSettings,
         type SimpleStore,
@@ -36,10 +37,14 @@
     import { getDialogContext, type GuestDialogProps } from "@/modules/services/LiveSyncUI/svelteDialog";
     import { SETTING_KEY_P2P_DEVICE_NAME } from "@vrtmrz/livesync-commonlib/compat/common/types";
     import ExtraItems from "@/modules/services/LiveSyncUI/components/ExtraItems.svelte";
-    import { TYPE_CANCELLED, type SetupRemoteP2PResultType } from "./setupDialogTypes";
+    import {
+        TYPE_CANCELLED,
+        type SetupRemoteP2PInitialData,
+        type SetupRemoteP2PResultType,
+    } from "./setupDialogTypes";
     import { LOG_LEVEL_VERBOSE, Logger } from "octagonal-wheels/common/logger";
     import { $msg as translateMessage } from "@/common/translation";
-    import { probeP2PSetupConnection } from "./p2pSetupConnectionProbe";
+    import { coordinateP2PSetupConnectionProbe, probeP2PSetupConnection } from "./p2pSetupConnectionProbe";
 
     const default_setting = pickP2PSyncSettings(DEFAULT_SETTINGS);
     let syncSetting = $state<P2PConnectionInfo>({ ...default_setting });
@@ -47,19 +52,19 @@
     const context = getDialogContext();
     let error = $state("");
     let connectionPathResetNotice = $state(false);
-    const hasValidTurnServer = $derived(hasValidP2PTurnServerUrl(syncSetting.P2P_turnServers ?? ""));
-    type Props = GuestDialogProps<SetupRemoteP2PResultType, P2PSyncSetting>;
+    const hasValidTurnServer = $derived(hasP2PTurnConfiguration(syncSetting));
+    type Props = GuestDialogProps<SetupRemoteP2PResultType, SetupRemoteP2PInitialData>;
 
     const { setResult, getInitialData }: Props = $props();
+    let connectionProbe: SetupRemoteP2PInitialData["connectionProbe"] | undefined;
     onMount(() => {
-        let initialData: P2PSyncSetting | undefined = undefined;
-        if (getInitialData) {
-            initialData = getInitialData();
-            if (initialData) {
-                copyTo(initialData, syncSetting);
-            }
+        const initialData = getInitialData?.();
+        connectionProbe = initialData?.connectionProbe;
+        const initialSettings = initialData?.settings;
+        if (initialSettings) {
+            syncSetting = pickP2PSyncSettings(initialSettings);
         }
-        const initialPeerName = (initialData?.P2P_DevicePeerName ?? "").trim();
+        const initialPeerName = (initialSettings?.P2P_DevicePeerName ?? "").trim();
         if (initialPeerName !== "") {
             return;
         }
@@ -96,59 +101,77 @@
     async function checkConnection() {
         try {
             processing = true;
+            const sourceError = validateManagedTurnSettings(syncSetting);
+            if (sourceError) return sourceError;
             const trialRemoteSetting = generateSetting();
-            const map = new Map<string, string>();
-            const store = {
-                get: (key: string) => {
-                    return Promise.resolve(map.get(key) || null);
-                },
-                set: (key: string, value: any) => {
-                    map.set(key, value);
-                    return Promise.resolve();
-                },
-                delete: (key: string) => {
-                    map.delete(key);
-                    return Promise.resolve();
-                },
-                keys: () => {
-                    return Promise.resolve(Array.from(map.keys()));
-                },
-                get db() {
-                    return Promise.resolve(this);
-                },
-            } as SimpleStore<any>;
-
-            const dummyPouch = new PouchDB<EntryDoc>("dummy");
-            const env: ReplicatorHostEnv = {
-                events: context.context.events,
-                translate: context.context.translate,
-                settings: trialRemoteSetting,
-                processReplicatedDocs: async (_docs: any[]) => {
-                    return;
-                },
-                confirm: context.services.confirm,
-                db: dummyPouch,
-                simpleStore: store,
-                deviceName: syncSetting.P2P_DevicePeerName || "unnamed-device",
-                platform: "setup-wizard",
-            };
-            const replicator = new TrysteroReplicator(env);
-            try {
-                const result = await probeP2PSetupConnection(replicator);
-                if (!result.ok) {
-                    return translateMessage("Failed to connect to the signalling relay: ${reason}", {
-                        reason: `${result.reason}`,
-                    });
-                }
-                return "";
-            } finally {
-                try {
-                    await replicator.close();
-                    await dummyPouch.destroy();
-                } catch (e) {
-                    Logger(e, LOG_LEVEL_VERBOSE, "setup-p2p-cleanup");
-                }
+            const admission = connectionProbe;
+            if (!admission) {
+                throw new Error("The P2P Setup connection probe is not available.");
             }
+            const result = await coordinateP2PSetupConnectionProbe(admission, trialRemoteSetting, async (signallingSettings) => {
+                const map = new Map<string, unknown>();
+                const store = {
+                    get: (key: string) => {
+                        return Promise.resolve(map.get(key) || null);
+                    },
+                    set: (key: string, value: unknown) => {
+                        map.set(key, value);
+                        return Promise.resolve();
+                    },
+                    delete: (key: string) => {
+                        map.delete(key);
+                        return Promise.resolve();
+                    },
+                    keys: () => {
+                        return Promise.resolve(Array.from(map.keys()));
+                    },
+                    get db() {
+                        return Promise.resolve(this);
+                    },
+                } as SimpleStore<unknown>;
+
+                const dummyPouch = new PouchDB<EntryDoc>("dummy");
+                let replicator: TrysteroReplicator | undefined;
+                try {
+                    const env: ReplicatorHostEnv = {
+                        events: context.context.events,
+                        translate: context.context.translate,
+                        settings: signallingSettings,
+                        processReplicatedDocs: async (_docs: PouchDB.Core.ExistingDocument<EntryDoc>[]) => {
+                            return;
+                        },
+                        confirm: context.services.confirm,
+                        db: dummyPouch,
+                        simpleStore: store,
+                        deviceName: syncSetting.P2P_DevicePeerName || "unnamed-device",
+                        platform: "setup-wizard",
+                    };
+                    replicator = new TrysteroReplicator(env);
+                    return await probeP2PSetupConnection(replicator);
+                } finally {
+                    try {
+                        await replicator?.dispose();
+                    } catch (e) {
+                        Logger(e, LOG_LEVEL_VERBOSE, "setup-p2p-replicator-cleanup");
+                    }
+                    try {
+                        await dummyPouch.destroy();
+                    } catch (e) {
+                        Logger(e, LOG_LEVEL_VERBOSE, "setup-p2p-database-cleanup");
+                    }
+                }
+            });
+            if (!result.ok) {
+                if ("kind" in result && result.kind === "blocked") {
+                    return translateMessage(
+                        "The connection test cannot add a signalling relay while P2P is active. Use the active relay settings, or disconnect P2P before testing."
+                    );
+                }
+                return translateMessage("Failed to connect to the signalling relay: ${reason}", {
+                    reason: `${result.reason}`,
+                });
+            }
+            return "";
         } finally {
             processing = false;
         }
@@ -184,6 +207,8 @@
         }
     }
     function commit() {
+        error = validateManagedTurnSettings(syncSetting) ?? "";
+        if (error) return;
         const setting = pickP2PSyncSettings(generateSetting());
         setResult(setting);
     }
@@ -195,7 +220,8 @@
             syncSetting.P2P_relays.trim() !== "" &&
             syncSetting.P2P_roomID.trim() !== "" &&
             syncSetting.P2P_passphrase.trim() !== "" &&
-            (syncSetting.P2P_DevicePeerName ?? "").trim() !== ""
+            (syncSetting.P2P_DevicePeerName ?? "").trim() !== "" &&
+            validateManagedTurnSettings(syncSetting) === undefined
         );
     });
 </script>
@@ -319,24 +345,24 @@
     </InputRow>
     <InfoNote>
         {translateMessage(
-            "TURN relay only is available when at least one valid TURN server URL is configured under Advanced Settings."
+            "TURN relay only requires a TURN server or a configured credential source under Advanced Settings."
         )}
     </InfoNote>
     <InfoNote notice visible={connectionPathResetNotice}>
         {translateMessage(
-            "TURN relay only requires at least one valid TURN server URL. Connection path has been restored to Automatic."
+            "TURN relay only requires TURN configuration. Connection path has been restored to Automatic."
         )}
     </InfoNote>
 </ExtraItems>
 <ExtraItems title={translateMessage("Advanced Settings")}>
     <InfoNote>
         {translateMessage(
-            "TURN server settings are only necessary if you are behind a strict NAT or firewall that prevents direct P2P connections. In most cases, you can leave these fields blank."
+            "Configure TURN when a direct connection cannot be established or when you select TURN relay only."
         )}
     </InfoNote>
-    <InfoNote warning>
+    <InfoNote>
         {translateMessage(
-            "TURN relays the encrypted WebRTC connection only when a direct path cannot be established. A TURN provider cannot read encrypted Vault contents, but it can observe connection metadata and traffic volume. Use a provider you trust."
+            "WebRTC encrypts data between your devices, including when it passes through TURN. The TURN provider cannot read the transferred data. It can see network addresses and traffic volume."
         )}
         <a
             href="https://github.com/vrtmrz/obsidian-livesync/blob/main/docs/p2p.md#signalling-relay-and-turn-server"
@@ -344,34 +370,7 @@
             rel="noopener noreferrer">{translateMessage("Learn more about signalling and TURN")}</a
         >.
     </InfoNote>
-    <InputRow label={translateMessage("TURN Server URLs (comma-separated)")}>
-        <textarea
-            name="p2p-turn-servers"
-            placeholder="turn:turn.example.com:3478,turn:turn.example.com:443"
-            autocapitalize="off"
-            spellcheck="false"
-            bind:value={syncSetting.P2P_turnServers}
-            rows="5"
-        ></textarea>
-    </InputRow>
-    <InputRow label={translateMessage("TURN Username")}>
-        <input
-            type="text"
-            name="p2p-turn-username"
-            placeholder={translateMessage("Enter TURN username")}
-            autocorrect="off"
-            autocapitalize="off"
-            spellcheck="false"
-            bind:value={syncSetting.P2P_turnUsername}
-        />
-    </InputRow>
-    <InputRow label={translateMessage("TURN Credential")}>
-        <Password
-            name="p2p-turn-credential"
-            placeholder={translateMessage("Enter TURN credential")}
-            bind:value={syncSetting.P2P_turnCredential}
-        />
-    </InputRow>
+    <TurnConfiguration bind:settings={syncSetting} />
 </ExtraItems>
 <InfoNote error visible={error !== ""}>
     {error}

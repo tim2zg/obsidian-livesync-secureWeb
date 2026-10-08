@@ -35,6 +35,7 @@ export interface SecureWebTransportConfig {
     targetHost: string;
     deviceId?: string;
     passkeyToken?: string;
+    networkFetch?: typeof fetch;
 }
 
 export class SecureWebEnvelopeError extends Error {
@@ -44,12 +45,25 @@ export class SecureWebEnvelopeError extends Error {
     }
 }
 
-let cachedPubkey: GatewayPubkeyMetadata | null = null;
-let lastPubkeyFetch = 0;
+/** Generate a wire UUID using the Web Crypto API available on older mobile clients. */
+export function createDeviceId(): string {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function checkCancellation(signal?: AbortSignal | null): void {
+    if (signal?.aborted) {
+        throw signal.reason ?? new DOMException('The request was aborted', 'AbortError');
+    }
+}
+
+const pubkeyCache = new Map<string, { metadata: GatewayPubkeyMetadata; fetchedAt: number }>();
 
 export function clearPubkeyCache() {
-    cachedPubkey = null;
-    lastPubkeyFetch = 0;
+    pubkeyCache.clear();
 }
 
 /**
@@ -156,17 +170,24 @@ export function encodeBase64(bytes: Uint8Array): string {
 /**
  * Fetch the active gateway public key metadata from the discovery endpoint.
  */
-export async function fetchGatewayPubkey(originUrl: string): Promise<GatewayPubkeyMetadata | null> {
+export async function fetchGatewayPubkey(
+    originUrl: string,
+    networkFetch: typeof fetch = fetch,
+    signal?: AbortSignal | null
+): Promise<GatewayPubkeyMetadata | null> {
+    const origin = new URL(originUrl).origin;
     const now = Date.now();
-    if (cachedPubkey && now - lastPubkeyFetch < (cachedPubkey.ttl_seconds || 1800) * 1000) {
-        return cachedPubkey;
+    const cached = pubkeyCache.get(origin);
+    if (cached && now - cached.fetchedAt < (cached.metadata.ttl_seconds || 1800) * 1000) {
+        return cached.metadata;
     }
 
     try {
         const discoveryUrl = new URL('/.well-known/gateway-pubkey', originUrl).toString();
-        const response = await fetch(discoveryUrl, {
+        const response = await networkFetch(discoveryUrl, {
             headers: { Accept: 'application/json' },
             cache: 'no-cache',
+            signal,
         });
 
         if (!response.ok) {
@@ -174,8 +195,7 @@ export async function fetchGatewayPubkey(originUrl: string): Promise<GatewayPubk
         }
 
         const data = (await response.json()) as GatewayPubkeyMetadata;
-        cachedPubkey = data;
-        lastPubkeyFetch = now;
+        pubkeyCache.set(origin, { metadata: data, fetchedAt: now });
         return data;
     } catch {
         return null;
@@ -229,7 +249,7 @@ export async function sealGatewayEnvelope(
     const sealed = seal(pkBytes, GATEWAY_REQUEST_INFO, new Uint8Array(0), plaintext);
 
     // 6. Bincode 1.3 serialize outer HybridSealed wire frame
-    return serializeHybridSealed(sealed);
+    return await Promise.resolve(serializeHybridSealed(sealed));
 }
 
 /**
@@ -237,9 +257,11 @@ export async function sealGatewayEnvelope(
  * with zero-plaintext fallback (fails explicitly on encryption/authorization failure).
  */
 export function createSecureWebFetch(config: SecureWebTransportConfig): typeof fetch {
-    const devId = config.deviceId || ('obsidian-' + Math.random().toString(36).substring(2, 10));
+    const devId = config.deviceId || createDeviceId();
+    const networkFetch = config.networkFetch ?? fetch;
 
     return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        checkCancellation(init?.signal);
         const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
         const method = (init?.method || (typeof input === 'object' && 'method' in input ? input.method : 'GET') || 'GET').toUpperCase();
 
@@ -294,7 +316,8 @@ export function createSecureWebFetch(config: SecureWebTransportConfig): typeof f
         }
 
         // 1. Fetch gateway public key metadata
-        const pubkeyData = await fetchGatewayPubkey(config.gatewayUrl);
+        const pubkeyData = await fetchGatewayPubkey(config.gatewayUrl, networkFetch, init?.signal);
+        checkCancellation(init?.signal);
         if (!pubkeyData) {
             throw new SecureWebEnvelopeError(`Cannot discover gateway public key at ${config.gatewayUrl}`);
         }
@@ -331,13 +354,14 @@ export function createSecureWebFetch(config: SecureWebTransportConfig): typeof f
 
         // 5. POST to gateway envelope endpoint
         const envelopeEndpoint = new URL('/gateway/e2e-envelope', config.gatewayUrl).toString();
-        const rawResponse = await fetch(envelopeEndpoint, {
+        const rawResponse = await networkFetch(envelopeEndpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/octet-stream',
                 'X-Gateway-Envelope': '1',
             },
             body: sealedWireBytes as unknown as BodyInit,
+            signal: init?.signal,
         });
 
         // If gateway returned an HTTP error without an encrypted payload, surface it

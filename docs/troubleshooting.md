@@ -47,9 +47,15 @@ Do not switch to P2P or reset the database as the first response. Check:
 
 If the remote is healthy but one device's local database is not, use [Reset Synchronisation on This Device](recovery.md#reset-synchronisation-on-this-device) only after backing up unsynchronised local files.
 
+## An unchanged file appears as a conflict after restart
+
+If the log says `Preserved unsynchronised local changes as a conflict`, keep both versions available until you have checked their contents. The message means that LiveSync could not prove that the Vault file was unchanged; it does not establish that you edited the file. Use **Inspect conflicts and file/database differences** in Hatch to review the current branches before selecting a version.
+
+At start-up, LiveSync can restore a missing device-local revision record when the file still exactly matches the current local database revision. If a newer revision has already arrived, that match may no longer exist. LiveSync then preserves the old file for review because it cannot distinguish an unchanged copy from an intentional edit back to older content. A new release cannot resolve a conflict which was already created merely by recognising a historical content match. If the problem recurs, include the first relevant log entries, plug-in versions on both devices, and a redacted full report with the issue steps.
+
 ## Synchronisation is paused for compatibility review
 
-A compatibility review is separate from the Change Log. It can appear after an internal database or settings-format change, or when a configured Vault is copied, restored, or opened in a new Obsidian profile without its device-local acknowledgement.
+A compatibility review is separate from the Change Log. It can appear after an internal database or settings-format change, when the saved version marker is invalid, or when an earlier review remains pending. Adding a device or opening a copied Vault with no device-local acknowledgement does not itself trigger a review. A pause already saved by an earlier release still needs the explicit resume action, because the saved message does not identify its original cause.
 
 The **Synchronisation paused for compatibility review** dialogue opens after the Obsidian layout is ready. If it has been closed, use the persistent Notice's **Review why** link, or run `Review why synchronisation is paused` from the command palette. Opening **Change Log** does not clear the pause.
 
@@ -88,6 +94,12 @@ Some settings must match across devices. LiveSync pauses synchronisation when th
 
 Current releases automatically align compatible settings which control how new chunks are created, by default and where possible. This applies to the chunk hash algorithm, chunk size, and splitter version. Existing content remains readable across these choices, although using different choices can reduce chunk reuse and increase storage or transfer work. An explicit opt-out retains the manual review. A mismatch involving encryption, path obfuscation, file-name case handling, or any combination which includes one of those settings always remains a manual decision.
 
+A missing legacy file-name case setting means case-insensitive handling. It matches an explicit disabled setting and does not require a rebuild for that difference. An explicitly enabled setting can use different document IDs and still requires a compatibility decision against either value. Other configuration differences shown in the dialogue must still be resolved.
+
+If the mismatch names **Encrypt internal file Properties**, update every device before accepting that preference. It affects subsequent Metadata writes for Hidden File Sync and Customisation Sync; it does not automatically protect existing Metadata. A manual remote Rebuild is strongly recommended if you need to protect existing paths, times, sizes, and Chunk references.
+
+The `Sync now` command keeps routine replication progress quiet so that it is convenient to assign to a keyboard shortcut; assign one in Obsidian if that suits your workflow. A quiet command may still open this dialogue when a mismatch or another decision requires your attention.
+
 The available actions depend on when the mismatch is found:
 
 - While checking a remote profile, `Use configured settings` accepts the shared values already stored in that remote. `Dismiss` leaves this device's settings unchanged.
@@ -99,11 +111,19 @@ The available actions depend on when the mismatch is found:
 
 Historic defect notices and renamed controls are retained in the [0.25 release history](releases/0.25.md) and [legacy release history](releases/legacy.md), rather than in the current troubleshooting path.
 
+## The remote database uses an unknown feature
+
+When a notice identifies an unknown feature, update this device and every other client of the same CouchDB database, including the CLI. The notice includes the feature identifier even if this version has no descriptive name for it. New synchronisation is refused, and receiving an unsupported requirement stops active replication, because an older client may not interpret the Metadata and its Chunk references correctly. Already queued file changes are not rolled back. The cleaned-remote recovery path also checks compatibility before counting Chunk references. Do not remove the feature name from the remote version document to bypass the check. After updating, reconnect and review any pending file changes before running Garbage Collection.
+
 ## Setup and settings questions
 
 ### Share a configuration with another device
 
 Generate an encrypted Setup URI from a working device. This preserves the intended remote profiles and selections while allowing the additional device to keep its own device-specific name. Store the URI and its passphrase separately.
+
+Choose **Time-bound** for sharing until the displayed end time, or **Compatible (no time limit)** when the URI must remain reusable or the receiving client only supports the existing format. If a Time-bound URI can no longer be opened, check the device clock and generate a fresh URI on a working device. See the [Setup URI sharing choices](settings.md#copy-the-current-settings-to-a-setup-uri).
+
+Adding a device or opening a copied Vault does not require a compatibility pause solely because its device-local version record is absent. If an earlier release already saved a compatibility pause, review the settings and resume synchronisation explicitly. Actual version or settings incompatibilities still require review.
 
 For deliberate setting changes during normal use, use `Sync Settings via Markdown` under `Sync settings`.
 

@@ -17,8 +17,8 @@ export function paneMaintenance(
     paneEl: HTMLElement,
     { addPanel }: PageFunctions
 ): void {
-    const isRemoteLockedAndDeviceNotAccepted = () => this.core?.replicator?.remoteLockedAndDeviceNotAccepted;
-    const isRemoteLocked = () => this.core?.replicator?.remoteLocked;
+    const isRemoteLockedAndDeviceNotAccepted = () => !!this.core?.replicator?.remoteLockedAndDeviceNotAccepted;
+    const isRemoteLocked = () => !!this.core?.replicator?.remoteLocked;
     // if (this.plugin?.replicator?.remoteLockedAndDeviceNotAccepted) {
     this.createEl(
         paneEl,
@@ -367,8 +367,13 @@ export function paneMaintenance(
                             sentIDs: new Set(),
                             sentFiles: new Set(),
                         }));
-                        await this.resetRemoteBucket();
-                        Logger(`Deleted all data on remote server`, LOG_LEVEL_NOTICE);
+                        const reset = await this.resetRemoteBucket();
+                        Logger(
+                            reset
+                                ? `Deleted all data on remote server`
+                                : `Fresh Start Wipe did not complete. Keep all synchronising devices stopped and run it again.`,
+                            LOG_LEVEL_NOTICE
+                        );
                     })
             )
             .addOnUpdate(this.onlyOnMinIO);
@@ -407,7 +412,9 @@ export function paneMaintenance(
                     .setDisabled(false)
                     .onClick(async () => {
                         await this.services.database.resetDatabase();
-                        await this.services.databaseEvents.initialiseDatabase();
+                        if (!(await this.services.databaseEvents.initialiseDatabase())) {
+                            Logger($msg("Ui.Common.LocalDatabaseInitialisationFailed"), LOG_LEVEL_NOTICE);
+                        }
                     })
             );
     });
