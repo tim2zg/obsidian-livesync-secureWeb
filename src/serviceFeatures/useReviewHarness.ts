@@ -1,6 +1,5 @@
 import { NEW_VAULT_SETTINGS } from "@vrtmrz/livesync-commonlib/settings";
 import { LOG_LEVEL_NOTICE } from "octagonal-wheels/common/logger";
-import type { UseP2PReplicatorResult } from "@vrtmrz/livesync-commonlib/compat/replication/trystero/UseP2PReplicatorResult";
 import type ObsidianLiveSyncPlugin from "@/main";
 import type { LiveSyncCore } from "@/main";
 import type { WorkspaceLeaf } from "@/deps";
@@ -16,6 +15,8 @@ import {
     runReviewHarnessVaultRoundTrip,
 } from "@/features/ReviewHarness/reviewHarnessVaultFixture";
 import type { CompatibilityReviewController } from "./compatibilityReview";
+import { runReviewHarnessIdBenchmark } from "@/features/ReviewHarness/reviewHarnessIdBenchmark";
+import { createIdBenchmarkOperations } from "@/features/ReviewHarness/reviewHarnessIdBenchmarkRuntime";
 
 async function runVaultRoundTrip(plugin: ObsidianLiveSyncPlugin): Promise<ReviewHarnessScenarioResult> {
     const vault = plugin.app.vault;
@@ -47,7 +48,6 @@ async function runVaultRoundTrip(plugin: ObsidianLiveSyncPlugin): Promise<Review
 export function useReviewHarness(
     core: LiveSyncCore,
     plugin: ObsidianLiveSyncPlugin,
-    p2p: UseP2PReplicatorResult,
     compatibilityReview: CompatibilityReviewController
 ): ReviewHarnessController {
     const services = core.services;
@@ -59,12 +59,9 @@ export function useReviewHarness(
         isCompatibilityReviewInitialised: () => compatibilityReview.initialised,
         getCompatibilityPause: () => compatibilityReview.pendingPause,
         openCompatibilityReview: () => compatibilityReview.openReview(),
-        getP2PComposition: () => ({
-            first: p2p.replicator,
-            second: p2p.replicator,
-            expectedServices: services,
-        }),
         runVaultRoundTrip: () => runVaultRoundTrip(plugin),
+        runIdBenchmark: async () =>
+            runReviewHarnessIdBenchmark(await createIdBenchmarkOperations(), activeWindow.performance),
         readContinuation: () => services.setting.getSmallConfig(REVIEW_HARNESS_STATE_KEY),
         writeContinuation: (value) => services.setting.setSmallConfig(REVIEW_HARNESS_STATE_KEY, value),
         deleteContinuation: () => services.setting.deleteSmallConfig(REVIEW_HARNESS_STATE_KEY),

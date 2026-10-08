@@ -12,84 +12,162 @@ Earlier releases remain available in the 1.0 release history, the 1.0 preview hi
 
 ## Unreleased
 
-## 1.0.21
+## 1.0.35-secureweb.1
 
-26th August, 2026
+5th October, 2026
 
-It is becoming more 'ordinary' with each release, but please let me know if anything has become less convenient.
+### SecureWeb fork
 
-### Interface and translation
+- SecureWeb encrypted CouchDB transport now uses the shared HTTP service after
+  merging upstream 1.0.35, including connection probes and remote preparation.
+  Each connection retains its own credentials and gateway public-key cache.
+- The native request adapter sends sealed envelopes when **Use Internal API**
+  is selected. Encryption failures stop the request without a plaintext retry.
 
-#### Fixed
+## 1.0.35
 
-- Remote Configuration section headings no longer overlap their contents when scrolling on mobile. Action buttons in Remote Configuration, Maintenance, and Patches now remain inside the settings pane on narrow screens.
+5th October, 2026
 
-## 1.0.20
-
-~~1.0.19~~ was cancelled because prerelease validation exposed an incorrect warning at start-up.
-
-25th August, 2026
-
-I know this is the second time I have said it, but I had grown quite fond of the settings screen. It seems, however, that a simpler, healthier life is called for.
-
-### Interface and translation
+### Synchronisation
 
 #### Fixed
 
-- Compatibility pause warnings now direct you to the dedicated compatibility review instead of the Change Log.
-- The Obsidian 1.13 settings page now waits for saved settings before choosing its initial layout. This prevents a spurious missing-replicator warning at start-up, keeps configured devices on the Synchronisation-first layout even when automatic synchronisation triggers are disabled, and keeps Quick Setup first on unconfigured devices.
+- We can continue synchronising after rebuilding an encrypted CouchDB remote, including when Hidden File Sync and Customisation Sync are enabled. (#1234)
+    - This plug-in reads the rebuilt data without reusing HTTP responses encrypted with the previous Security Seed.
 
-#### Improved
+### Customisation Sync
 
-- Settings page names, controls in General Settings, Quick Setup actions, and Advanced controls now use Obsidian 1.13's native settings interface and global search, while retaining their familiar icons. The landing page keeps Remote Configuration and Sync Settings together, places Appearance, Logging, and Extra menus under General Settings, and groups maintenance, optional features, advanced settings, and help by purpose. Earlier supported Obsidian versions continue to use the pane-based interface.
-- Settings changes which require database initialisation now use a focused Setup Manager dialogue to choose between existing synchronisation data and the files in the current Vault. The selected reset or rebuild is reserved before the settings are saved, while cancelling offers a separate, explicit settings-only fallback.
+#### Fixed
 
-## 1.0.18
+- Customisation Sync now waits until this plug-in is ready before handling configuration file events, and applying settings while synchronisation is suspended no longer scans configuration files. (#1220)
+    - Resuming synchronisation scans once and restarts the periodic scan when enabled.
 
-24th August, 2026
+### Acknowledgements
+
+Thank you for your contributions!
+
+- @kimjansheden (#1220)
+
+## 1.0.34
+
+2nd October, 2026
+
+### Security
+
+- Fixed an issue where sensitive information could be included in exported configuration data under certain conditions. Updating is recommended. (refs #1218)
+- Improved configuration persistence and JSON conflict handling.
+
+### Acknowledgements
+
+Thank you for your contributions!
+
+- @kimjansheden (#1218)
+
+## 1.0.33
+
+1st October, 2026
+
+This has turned into quite a substantial release, and I think it brings meaningful improvements to the core of Self-hosted LiveSync. If you notice anything, please feel free to let me know.
+
+### Privacy and compatibility
+
+#### New Feature
+
+- An optional saved ID key can generate encrypted Chunk IDs and obfuscated Metadata document IDs independently of the current E2EE passphrase.
+    - New Vaults use a random key by default; existing Vaults keep their current ID configuration by default. You can also derive a key from the current E2EE passphrase, enter a separate source, or import a recovery code. The source is not retained; the saved key can be revealed locally as a recovery code.
+    - The saved key stays in place when the E2EE passphrase changes or E2EE is turned off. Share it with another device through a protected Setup URI. Changing document IDs on an existing remote requires the usual Rebuild and Fetch procedure.
+- We can now keep the file properties used by Hidden File Sync and Customisation Sync private in CouchDB.
+    - **Encrypt internal file Properties** extends E2EE V2 and Property Encryption to their paths, times, sizes, and Chunk references.
+    - Existing configurations keep this preference disabled. New Vaults enable it for use when the required encryption settings are active.
+    - Update every synchronising device before enabling it. It protects future writes; a manual remote Rebuild is strongly recommended to protect existing properties.
+- We can now see which unsupported feature prevents a client from synchronising with CouchDB.
+    - Clients check the features required by the remote before transferring data or resetting the local database for Fast Fetch. Receiving an unsupported requirement also stops active replication.
+
+- We can now compare ID generation performance on a desktop or mobile device through **Open review harness**, available with the developers' debug tools enabled.
+    - The copied report includes legacy and independent ID timings and, where available, approximate JavaScript heap samples. The measurement uses fixed test data and keeps our Vault and settings unchanged.
+
+#### Fixed
+
+- Updated `brace-expansion` and `markdown-it` to include upstream security fixes.
+- We can now keep using an E2EE passphrase beginning with `%` after restarting Obsidian. (#1221)
+    - This plug-in encrypts it before saving the settings. If an earlier version saved it in plain text, re-enter the passphrase used to encrypt the existing data after updating. Treat that passphrase as exposed if the affected `data.json` was shared.
+- A receiving device now retries an unavailable CouchDB Chunk when file Metadata arrives before that Chunk is visible, helping rapid edits reach the Vault after an initial on-demand lookup misses it. (#1224)
+    - Retries start after two seconds and continue with increasing delays while finite replication is active. When it ends, this plug-in checks locally and makes a final lookup if needed, without waiting out the remaining retry delay.
+- We can now distinguish initial on-demand Chunk requests (`🛄`) from retries (`🔁`) in the status bar. These replace `🧩`; each pending Chunk appears in one category, including while a retry is waiting.
 
 ### Synchronisation and storage
 
 #### Fixed
 
-- Reset and rebuild workflows now use the local database selected by their updated settings, preventing stale data from reopening after a **Database Suffix** change. If database initialisation does not complete, the workflow remains paused instead of continuing with incomplete state.
-
-#### Improved
-
-- Rebuilds now recheck restored file events against the current Vault, use current file contents, and finish processing them before the plug-in reports readiness.
-
-## 1.0.17
-
-23rd August, 2026
+- Received changes held during start-up or a fetch are applied when this plug-in becomes ready, without waiting for another change or a settings save. **Suspend database reflecting** continues to hold changes (#1200).
+- Customisation Sync now compares full millisecond timestamps, so the freshness labels and **Select All Shiny** no longer mistake an older copy for a newer one because of timestamp truncation. (#1194)
+- **Hide not applicable items** now hides identical Customisation Sync items and refreshes the list when toggled. Items with applicable differences stay visible. (#1193)
 
 ### Interface and translation
 
-#### Fixed
+#### Improved
 
-- Settings generated from the settings manifest, Setup Wizard configuration summaries, and warnings about externally changed settings now honour **Display language** when a translation is available, instead of remaining in English (PR #1123). Thank you to @nimula for the contribution!
+- More settings and messages are now available in Russian. (#1187)
+    - Dialogues show generated QR codes, key pairs, and database sizes again.
+- We can now use updated Spanish translations for settings and messages. (#1212)
 
-### Peer-to-peer synchronisation
+### Setup
+
+#### New Feature
+
+- We can now share a Setup URI with a displayed time limit, or choose **Compatible** for reuse without a time limit.
+    - **Time-bound** uses the current fixed seven-day UTC window, so the displayed end may be less than seven days away. Compatible retains the existing URI format; receiving devices still need to support the shared settings.
+    - The time condition applies when opening the URI. It does not revoke imported credentials or prevent reuse after rolling the device clock back.
 
 #### Improved
 
-- P2P connection profiles now provide four **P2P message size** presets and a **Connection path** choice between **Automatic** and **TURN relay only**. Smaller messages can improve compatibility on paths which fragment or drop larger WebRTC messages, while relay-only routing requires a configured TURN server. P2P connection strings and encrypted Setup URIs preserve both choices.
-    - Thank you to @andrewschreiber for the detailed fragmentation diagnosis and working 800-byte threshold in vrtmrz/livesync-commonlib#97, which informed this compatibility design.
-- An optional self-hosted Coturn Compose starter is now available for P2P deployments that need a TURN relay. It uses a pinned upstream image and documents its network, credential, security, and verification boundaries.
-
-## 1.0.16
-
-19th August, 2026
-
-### Conflict handling and recovery
+- We can now distinguish the three Setup URI and QR code choices by their short labels and icons: initialise or overwrite the remote, join this device, or apply settings only.
 
 #### Fixed
 
-- **Back to this revision** in Document History now restores the selected content as a new non-deleted successor revision before reflecting it to the Vault. A readable revision restored after a logical deletion therefore remains restored through later synchronisation instead of being overwritten by the deletion.
-    - If the file changes while restoration is in progress, the operation stops instead of extending a stale revision. Existing conflicts remain available through **Inspect conflicts and file/database differences**.
+- We can now add a device or open a copied Vault without a compatibility pause solely because its device-local version record is absent.
+    - Existing version or settings incompatibilities still require review. A pause already saved by an earlier release still needs one explicit resume action.
+
+### Acknowledgements
+
+Thank you for your contributions!
+
+- @kimjansheden (#1219)
+- @Immick (#1195, #1196)
+- @bolikcraft (#1187)
+- @speedy-axolotl (#1212)
+
+### Issue replies
+
+I am a little behind on replying to issues, but I am reading them and will respond as I work through them. I have had little uninterrupted time recently, and that should improve soon.
+
+## 1.0.32
+
+27th September, 2026
+
+The 1.0.31 pre-release was not promoted after validation found that a receiving device could reject encrypted CouchDB changes when Path Obfuscation was enabled. This release includes its changes and corrects that issue.
 
 ### Synchronisation and storage
 
-#### Improved
+#### Fixed
 
-- One-shot CouchDB synchronisation now releases stalled web-compatible connection checks before replication starts, so a later synchronisation can make a fresh attempt (Commonlib 0.1.16).
-    - The 60-second safeguard applies only to pre-replication checks. It does not limit ordinary synchronisation, and the **Use Internal API** path is unchanged.
+- The receiving device now accepts encrypted file information when both end-to-end encryption and Path Obfuscation are enabled. The 1.0.31 pre-release could reject this information, leaving files from another device absent from the Vault.
+- Files with colons in their names now retain their full paths in synchronisation data instead of appearing as incorrectly named copies at the Vault root. (#1206)
+    - Obsidian may refuse to create a missing file with such a name. LiveSync also treats these names as invalid on Windows and Android, so the file may not appear in those devices' Vaults. Existing misplaced copies are left for you to review; this change does not remove them automatically.
+- Received changes within the configured modification-time limit are applied to the Vault again while remediation mode is active. Changes newer than the limit remain blocked; changes arriving while a fetch makes the local database unavailable are kept for a later attempt.
+- A scheduled fetch no longer offers Simple Fetch while remediation mode is active. This prevents the fetch from bypassing the modification-time limit; the detailed flow explains the restriction and offers to clear it first (#1202). Thank you to @kimjansheden for both fixes and the regression tests in PR #1208!
+- On start-up, an unchanged file with a missing local revision record can be recognised before newer content arrives, avoiding an unnecessary conflict. Files with actual local edits still require conflict review. (#1207)
+
+## 1.0.31
+
+26th September, 2026
+
+### Synchronisation and storage
+
+#### Fixed
+
+- Files with colons in their names now retain their full paths in synchronisation data instead of appearing as incorrectly named copies at the Vault root. (#1206)
+    - Obsidian may refuse to create a missing file with such a name. LiveSync also treats these names as invalid on Windows and Android, so the file may not appear in those devices' Vaults. Existing misplaced copies are left for you to review; this change does not remove them automatically.
+- Received changes within the configured modification-time limit are applied to the Vault again while remediation mode is active. Changes newer than the limit remain blocked; changes arriving while a fetch makes the local database unavailable are kept for a later attempt.
+- A scheduled fetch no longer offers Simple Fetch while remediation mode is active. This prevents the fetch from bypassing the modification-time limit; the detailed flow explains the restriction and offers to clear it first (#1202). Thank you to @kimjansheden for both fixes and the regression tests in PR #1208!
+- On start-up, an unchanged file with a missing local revision record can be recognised before newer content arrives, avoiding an unnecessary conflict. Files with actual local edits still require conflict review. (#1207)

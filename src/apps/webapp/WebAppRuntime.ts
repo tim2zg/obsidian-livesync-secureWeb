@@ -1,3 +1,4 @@
+import { useP2PSettingsPreparation } from "@/serviceFeatures/useP2PSettingsPreparation";
 /** Browser runtime for Self-hosted LiveSync over the File System Access API. */
 
 import { LiveSyncBaseCore } from "@/LiveSyncBaseCore";
@@ -146,6 +147,13 @@ export class WebAppRuntime {
         return this.paneHost;
     }
 
+    /**
+     * Import local files and complete the readiness boundary needed by optional P2P.
+     *
+     * An unconfigured central remote cannot use the normal offline-scan path, so
+     * the explicit WebApp scan completes the same post-scan finalisation without
+     * treating the central remote as configured.
+     */
     async scanLocalFiles(): Promise<boolean> {
         const core = this.core;
         const fileAccess = this.platformServiceModules?.vaultAccess;
@@ -171,7 +179,17 @@ export class WebAppRuntime {
                 this.addLog(`Failed to import ${path}: ${String(error)}`, LOG_LEVEL_NOTICE, "scan");
             }
         }
-        return succeeded;
+        if (!succeeded || core.services.appLifecycle.isReady()) {
+            return succeeded;
+        }
+        if (!(await core.services.databaseEvents.onDatabaseInitialised(false))) {
+            return false;
+        }
+        if (!(await core.services.fileProcessing.commitPendingFileEvents())) {
+            return false;
+        }
+        core.services.appLifecycle.markIsReady();
+        return true;
     }
 
     async start(): Promise<void> {
@@ -200,7 +218,9 @@ export class WebAppRuntime {
                 useRedFlagFeatures(core);
                 useCheckRemoteSize(core);
                 useRemoteConfiguration(core);
-                this.p2p = useP2PReplicatorFeature(core);
+                this.p2p = useP2PReplicatorFeature(core, undefined, undefined, {
+                    prepareP2PSettings: useP2PSettingsPreparation(core.services.API.webCompatFetch.bind(core.services.API)),
+                });
                 this.paneHost = {
                     services: core.services,
                     p2p: this.p2p,

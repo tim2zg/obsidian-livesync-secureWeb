@@ -29,18 +29,7 @@ npm run build
 
 #### Community Review dependency installation
 
-Community Review installs dependencies independently before applying type-aware source rules. A successful installation with the npm version bundled with the repository's current Node.js CI does not prove that the lockfile is accepted by the scanner's npm version.
-
-After changing `package.json`, a workspace manifest, or `package-lock.json`, verify both installation paths:
-
-```bash
-npm ci --ignore-scripts
-npx --yes npm@10.9.2 ci --ignore-scripts
-```
-
-The npm 10.9.2 command is the current project-side compatibility check for the Community Review installation path. Update this check when the scanner runtime changes.
-
-If Community Review reports widespread TypeScript `error` types across unrelated external packages, confirm that dependency installation completed successfully before changing source imports, declarations, or lint rules. An installation failure can make every unresolved external type appear as downstream unsafe-type findings.
+After changing a dependency manifest or lockfile, follow the [npm 10 clean-installation check](test/README.md#npm-10-clean-installation-check) before the normal source and unit checks. The test guide records the command used by CI and the distinction between installation failures and source diagnostics.
 
 ### Commands
 
@@ -77,6 +66,8 @@ To facilitate development and testing, the build process can automatically copy 
 
 ### Testing Infrastructure
 
+See the [test procedures](test/README.md) for clean-installation checks, local validation commands, and links to each runtime suite.
+
 - **Vitest**:
     - **Unit Tests** (`vitest.config.unit.ts`): Unit tests run in Node.js (excluding harnesses and integration tests). Unit tests should be `*.unit.spec.ts` and placed alongside the implementation file (e.g., `ChunkFetcher.unit.spec.ts`). Executed via `npm run test:unit`.
     - **Integration Tests** (`vitest.config.integration.ts`): Tests run in Node.js against a real CouchDB instance. Integration tests should be `*.integration.spec.ts` or `*.integration.test.ts` and placed alongside the implementation file (e.g., `StreamingFetch.integration.spec.ts`). Executed via `npm run test:integration`.
@@ -85,11 +76,11 @@ To facilitate development and testing, the build process can automatically copy 
 
 Regression tests remain in the suite owned by the implementation under test. Plug-in tests may be co-located with their source, while independent application tests remain under `test/apps/` or `test/browser-apps/` so that they stay outside the Community Review source boundary. Prefix a case or group with `compatibility:` when it protects a persisted input or state which current releases still accept, and with `retirement guard:` when it prevents a removed setting, control, or notification from returning. Remove or replace a compatibility case only when the corresponding input is no longer accepted or an equivalent maintained case preserves the contract. Remove a retirement guard only when another current contract makes the old behaviour unreachable. Do not preserve a disconnected historical test as an executable specification when no maintained runner invokes it; Git history is the reference for retired test infrastructure.
 
-- **CLI E2E** (`src/apps/cli/testdeno/`): Host-independent consumer workflows. The canonical Compose P2P suite covers ordinary two-peer synchronisation, replacement of the current replicator followed by transfer with the same peer, and explicit relay disconnection followed by paused and resumed reconnection. Its lifecycle entry point is included only in the Docker test build and does not add a public CLI command. Run `npm run test:e2e:cli` for the ordinary suite or `npm run test:e2e:cli:p2p` for P2P validation.
+- **CLI E2E** (`src/apps/cli/testdeno/`): Host-independent consumer workflows. The canonical Compose P2P suite covers ordinary two-peer synchronisation, replacement of the current Replicator followed by transfer with the same peer, and explicit relay disconnection followed by paused and resumed reconnection. Its lifecycle entry point is included only in the Docker test build and does not add a public CLI command. Run `npm run test:e2e:cli` for the ordinary suite or `npm run test:e2e:cli:p2p` for P2P validation.
 - **Self-hosted setup tools** (`utils/couchdb/`, `utils/setup/`, and `utils/flyio/`): Deno contract tests consume the exact locked Commonlib registry package, verify current CouchDB, Object Storage, and random-room P2P Setup URI defaults and remote profiles, and keep CouchDB administration separate from package-owned LiveSync database-version negotiation. `unit-ci` also provisions a real temporary CouchDB database and verifies its version document against the installed Commonlib package. Run `npm run test:setup-tools` for the local contract gate.
-- **Real Obsidian E2E** (`test/e2e-obsidian/`): Local-first scripts that launch real Obsidian with temporary vaults and the built Self-hosted LiveSync plug-in. Use these for boot-up sequence, vault reflection, RedFlag flows, Fast Setup (Simple Fetch), settings dialogues, restart-sensitive workflows, Object Storage regressions, and other behaviour that depends on Obsidian itself. Run focused scripts such as `npm run test:e2e:obsidian:two-vault-sync`, or use `npm run test:e2e:obsidian:local-suite:services` to run the broader local suite with CouchDB and MinIO fixtures managed by the wrapper.
+- **Real Obsidian E2E** (`test/e2e-obsidian/`): Local-first scripts that launch real Obsidian with temporary vaults and the built Self-hosted LiveSync plug-in. Use these for boot-up sequence, vault reflection, RedFlag flows, Fast Setup (Simple Fetch), settings dialogues, restart-sensitive workflows, Object Storage regressions, and other behaviour that depends on Obsidian itself. Run focused scripts such as `npm run test:e2e:obsidian:two-vault-sync`, or use `npm run test:e2e:obsidian:local-suite:services` to run the broader local suite with CouchDB and RustFS fixtures managed by the wrapper.
 
-- **Docker Services**: Service-backed tests use CouchDB and MinIO (S3). Canonical P2P validation owns its relay through the CLI Compose runner:
+- **Docker Services**: Service-backed tests use CouchDB and RustFS (S3). Canonical P2P validation owns its relay through the CLI Compose runner:
 
     ```bash
     npm run test:docker-all:start  # Start all test services
@@ -129,18 +120,41 @@ Changes spanning both repositories must first produce a packed Commonlib artefac
 
 ## Architecture
 
+The [Project glossary](docs/glossary.md#developer-and-design-terms) defines the
+stable developer and design vocabulary used in this section. The guidance
+below describes how those boundaries are applied.
+
+For file-event admission versus physical Vault writes, see
+[File events and storage writes](docs/tech_info.md#file-events-and-storage-writes)
+and its linked Commonlib contract. Keep regression coverage for those two
+directions separate when changing deletion handling.
+
+For shared synchronisation-setting comparisons, directional reconstruction
+consequences, and the lifetime of a recovery decision, see
+[Tweak compatibility and recovery](docs/design_docs/tweak_compatibility.md).
+
 ### Service composition and legacy Modules
 
 The application is composed from Services, ServiceModules, serviceFeatures, add-ons, and a legacy Module layer:
 
 - **Service Hub**: the long-lived registry of service contracts. Add a simple extension, such as a pre-replication check, to the handler owned by the relevant Service.
-- **ServiceModule**: a host-created, long-lived operational capability shared through the typed `ServiceModules` record. Current examples include storage access, file handling, and database rebuilding.
+- **ServiceModule**: a host-created, long-lived stateful or resource-owning capability shared through the typed `ServiceModules` record. Current examples include storage access, file handling, and database rebuilding.
 - **serviceFeature**: a typed composition function which accepts only its declared Services and ServiceModules. It registers lifecycle handlers, commands, user-interface bindings, or other host glue, and may return a focused view. It is not a runtime registry entry.
-- **AbstractModule** and **AbstractObsidianModule**: the legacy application Module layer. Existing Modules remain supported, but their broad core access and two-phase binding are not the preferred dependency boundary for new composition.
+- **AbstractModule** and **AbstractObsidianModule**: the legacy application Module layer. Existing Modules are loaded by the application and bound after the Service graph has been composed; this broad core access is not the preferred dependency boundary for new orchestration.
 
-Mutable state is permitted in a serviceFeature. State alone is not a reason to introduce a class, ServiceModule, or legacy Module. Prefer a private context and module-level functions unless stable identity, polymorphism, shared resource ownership, replacement, abort, or disposal is part of the contract.
+The normal composition order is the Service Hub, Replicator provider registration, ServiceModules, serviceFeatures, add-ons, and finally legacy Module binding. A serviceFeature may therefore consume an already constructed ServiceModule. Preferring a serviceFeature for new composition is a dependency-boundary rule, not an initialisation-order rule.
 
-Use interaction-based, London School unit tests at the composition boundary. Verify collaborator calls, ordering, failure short-circuiting, and handler registration. If a test needs a broad core fixture, a deep mock chain, manual prototype invocation, or unrelated Services, treat that friction as a design-review signal.
+Mutable state is permitted in a serviceFeature. State alone is not a reason to create a class, a ServiceModule, or retain an AbstractModule. Prefer one private context, with module-level functions which receive that context, when identity and polymorphism are not part of the contract. Separate the state, transitions, and invariants from the surrounding function which registers lifecycle handlers and connects downstream effects. Give the stateful boundary narrow collaborators rather than `LiveSyncBaseCore`.
+
+Use a class when stable object identity, replaceable implementations, or an explicit external-resource lifecycle such as serialised ownership, `dispose()`, or `abort()` is part of the contract. Use a ServiceModule when that operational capability or resource lifecycle must also be shared explicitly by several consumers. Do not introduce a class merely to group dependencies or make private functions callable.
+
+Several narrow views over one lifetime do not require several state owners or a public façade class. One private context may back all of those views, provided that the context remains private and each consumer receives only its declared contract. Keep actual resource owners separate when identity, serialised replacement, abort, retirement, or disposal order is part of their behaviour.
+
+When a core-owned serviceFeature returns a view needed by one host-specific consumer, pass that view through host composition instead of storing it as a public `LiveSyncBaseCore` property or promoting it to a ServiceModule. The receiving host should inject the view into the narrow command or application context which uses it.
+
+Commonlib's `targetFilter.ts` and `prepareDatabaseForUse.ts` demonstrate the intended split: focused factories or operations own their private state and behaviour, while the corresponding `use...` function composes dependencies and registers handlers. The P2P composition follows the same direction at a larger scale by separating durable policy and room-session ownership from host lifecycle and user-interface wiring. Existing Modules do not apply this boundary consistently; improve the affected boundary when changing their behaviour rather than performing an unrelated mechanical conversion.
+
+Use interaction-based, London School unit tests for the composition boundary. Verify collaborator calls, ordering, failure short-circuiting, and handler registration, then test the focused state owner for its transitions and invariants. If a test needs a broad core fixture, a large class mock, deep mock chains, or unrelated Services, treat that friction as a design-review signal and consider a private context with narrower functions before adding more test machinery.
 
 See [Service feature and legacy Module boundaries](docs/design_docs/service_feature_and_legacy_module_boundaries.md) for the selection criteria, current examples, reasons to avoid new `AbstractModule` subclasses, incremental migration guidance, and test shapes. Commonlib's [service feature composition guide](https://github.com/vrtmrz/livesync-commonlib/blob/main/docs/service-feature-composition.md) defines the shared host-neutral boundary.
 
@@ -159,7 +173,14 @@ Legacy Modules remain grouped by directory:
 - **Service Hub** (`src/modules/services/`): Central service registry using dependency injection
 - **Common Library** (`@vrtmrz/livesync-commonlib`): Platform-independent synchronisation logic, shared with the CLI, WebApp, WebPeer, and external tools
 
-Commonlib owns the P2P replicator and Trystero transport lifecycle. Host commands, event handlers, and views must retain the Commonlib service-feature result and resolve its current `replicator` at the point of use. They must not snapshot an instance which can be replaced when settings or the local database change, close Trystero-owned raw peers, or install another Trystero transport generation at the application root.
+See [Replicator architecture](docs/design_docs/replicator_architecture.md) for
+the implemented provider contract, active Replicator lifecycle, publication and
+session fences, P2P ownership exception, compatibility boundaries, and the
+steps required to add a built-in provider.
+
+Commonlib owns one stable `LiveSyncP2PService`, its `P2PRoomSessionOwner`, and the replaceable Trystero room session. Host commands, event handlers, and views consume the focused transport, connection-probe admission, directory, peer-admission, transfer, change-relay, configuration, and diagnostic views returned by the service feature. They must not retain the deprecated compatibility Replicator as an ordinary service locator, close Trystero-owned raw peers, or install another Trystero transport generation at the application root. The exact implemented ownership and shutdown boundaries are recorded in Commonlib's [P2P transport lifecycle](https://github.com/vrtmrz/livesync-commonlib/blob/main/docs/p2p-transport-lifecycle.md) design document.
+
+The [TURN connection settings design](docs/design_docs/renewable_turn_credentials.md) describes how the host prepares temporary ICE credentials in a connection-only settings copy. It covers room reuse and expiry, replication continuation, profile persistence and sharing, and report redaction.
 
 ### Conflict Merge Policy
 
@@ -167,9 +188,9 @@ Markdown conflict auto-merge should behave like a conservative three-way merge. 
 
 When in doubt, prefer the safer outcome: preserve data, keep the conflict visible, and ask the user rather than silently discarding content or choosing one side.
 
-The detailed contract is documented in [Conflict resolution and revision provenance](docs/specs_conflict_resolution.md). Determine the merge base by intersecting the exact `available` revision IDs from both leaf histories and selecting the nearest shared revision. Do not infer ancestry from revision generation numbers. When a remote resolution reaches a Vault which still contains the exact content of a deleted losing branch, treat that content as known synchronised history so the resolution can be reflected without recreating the conflict.
+The detailed contract is documented in [Conflict resolution and revision provenance](docs/specs_conflict_resolution.md). Determine the merge base by intersecting the exact `available` revision IDs from both leaf histories and selecting the nearest shared revision. Do not infer ancestry from revision generation numbers. An unchanged file is recognised by comparing its bytes with its exact device-local file-reflection provenance, including when that revision belongs to a deleted losing branch.
 
-File operations made while a conflict is active must use the device-local file-reflection provenance injected into `ServiceFileHandlerBase`. Treat its exact revision as authoritative; use byte equality only to reconstruct a missing record when exactly one available revision matches. If branch identity remains unknown, preserve data and leave the conflict visible. Do not hide key-value database readiness behind an implicit wait: maintained hosts open it through the sequential settings lifecycle before file events or replication begin.
+Ordinary file saves and incoming reflection use that provenance even before a conflict exists. An unchanged stale file must not become a child of the current winner; a genuine edit extends the recorded revision. Without a readable recorded base, compare only current live leaves to avoid duplicate content. Otherwise, preserve the file as a fresh independent root under the same document ID, leaving ancestry unknown. Historical byte equality cannot distinguish an unchanged file from an intentional revert. Explicit reconciliation, deletion, and rename retain their separate contracts. Do not hide key-value database readiness behind an implicit wait: maintained hosts open it through the sequential settings lifecycle before file events or replication begin.
 
 - If one side deletes a line and the other side leaves that same line unchanged, treat it as a safe deletion. The deleted line must not be reintroduced into the merged result.
 - If one side inserts new content in a different region while the other side deletes an unchanged old region, preserve the insertion and the deletion.
@@ -178,6 +199,8 @@ File operations made while a conflict is active must use the device-local file-r
 - Avoid resolving conflicts by simply choosing the newest revision unless the user has explicitly selected that behaviour.
 
 This policy is intentionally aligned with the conflict checkboxes and compatibility settings: automatic merge should remove avoidable prompts, but it must not silently choose between overlapping user intentions.
+
+The [multiple-device conflict test procedure](test/README.md#multiple-device-conflict-regression-tests) documents the five CouchDB-backed cases, execution steps, expected results, and coverage boundaries.
 
 ### File Structure Conventions
 
@@ -212,12 +235,39 @@ Commonlib owns the typed English fallback for messages requested by its services
 
 ### Logging & Debugging
 
+#### ID generation measurements on a device
+
+Enable **Enable Developers' Debug Tools.**, restart Obsidian, and run **Open review harness** from the command palette. Choose **Run** beside **ID generation performance**, keep Obsidian in the foreground, and use **Copy Markdown report** to retain the results. The **Automatic** action does not run this measurement; **Full review** includes it.
+
+The measurement uses fixed in-memory inputs and keys, with no Vault, database, settings, or remote writes. It compares legacy `xxhash64` and independent Chunk IDs for 256-byte, 4-KiB, and 32-KiB inputs, and compares obfuscated document IDs. Each result reports the median and range of three 1,000-ID samples and the median time per ID. Key derivation at save time is measured separately. Warm-up and pauses between batches are excluded from the timings. These measurements do not represent a full Rebuild.
+
+Where `performance.memory` is available, the report includes approximate JavaScript heap samples before, during, and after measurement. These may include other Obsidian activity and garbage collection; they are neither total process RAM nor an exact peak. Unsupported devices explicitly report that heap measurements are unavailable.
+
+The developer-only adapter in `src/features/ReviewHarness/reviewHarnessIdBenchmarkRuntime.ts` imports `HashManager` from Commonlib's public `/hashing` entry. Compilation, packed-package checks, and runtime tests cover this boundary. The algorithms remain owned by Commonlib.
+
+#### Logs
+
 - Use `this._log(msg, LOG_LEVEL_INFO)` in modules (automatically prefixes with module name)
 - Log levels: `LOG_LEVEL_DEBUG`, `LOG_LEVEL_VERBOSE`, `LOG_LEVEL_INFO`, `LOG_LEVEL_NOTICE`, `LOG_LEVEL_URGENT`
     - LOG_LEVEL_NOTICE and above are reported to the user via Obsidian notices
     - LOG_LEVEL_DEBUG is for debug only and not shown in default builds
 - Dev mode creates `ls-debug/` folder in `.obsidian/` for debug outputs (e.g., missing translations)
     - This causes pretty significant performance overhead.
+
+#### Diagnostic and notice ownership
+
+- A Commonlib or service operation should normally record detailed diagnostics at `LOG_LEVEL_VERBOSE` and return a typed result which lets its caller distinguish complete, partial, and failed outcomes. Do not make callers infer an outcome by parsing log text.
+- Detailed diagnostics may be long and remain in English when they are intended for tracing and the generated report. Include enough context to identify the operation, affected target, and remaining state or retry behaviour.
+- The application boundary which owns the workflow should decide whether to raise `LOG_LEVEL_NOTICE`. It has the interaction context to describe the user-visible consequence and the next useful action; an internal stage description alone is not a useful notice.
+- When several files fail, issue one concise summary notice after the operation returns. Keep the per-file paths and technical causes at verbose level so that the notice remains readable and the generated report remains traceable.
+- Commonlib should raise a notice only when its contract explicitly owns user presentation and no higher-level caller can add the required workflow context.
+
+The ordinary start-up scan provides a concrete comparison:
+
+- Good verbose diagnostic: `Offline scan failed to synchronise ${path} between storage and the local database; this path remains eligible for a later scan.` It identifies the operation, the two states being reconciled, the exact target, and what can happen next. Its length is appropriate for a report.
+- Notice which needs more context: `Local database initialisation did not complete. See the log for details.` It describes an internal stage, but does not tell the user whether synchronisation can continue, what may be affected, or how to obtain the detailed log.
+- Good application notice for a partial result: `Not all files could be synchronised. Check the affected files. Generate a report to review the detailed log.` It states the observable consequence, gives a proportionate action, and leaves the per-file evidence in the report.
+- Good application notice for a failed result: `Self-hosted LiveSync cannot synchronise. Generate a report to review the detailed log.` It states the operational consequence without exposing the internal initialisation stage.
 
 ## Common Patterns
 
@@ -244,14 +294,14 @@ Existing legacy Modules continue to register their handlers in `onBindFunction()
   `Plugin.addSettingTab()`. Register a settings tab which reads persisted values
   from the sequential `onSettingLoaded` lifecycle, seed its editing snapshot
   before registration, and keep definition construction independent of local
-  database and replicator readiness. See
+  database and Replicator readiness. See
   [the declarative settings adapter ADR](docs/adr/2026_08_declarative_settings_adapter.md).
 - Use `this.services.setting.saveSettingData()` instead of using plugin methods directly
 
 ### Database Operations
 
 - Local database operations through `LiveSyncLocalDB` (wraps PouchDB)
-- Document types: `EntryDoc` (files), `EntryLeaf` (chunks), `PluginDataEntry` (plugin sync)
+- Document types are owned by Commonlib. `EntryDoc` covers file Metadata, Chunks, database version information, Milestone information, Node information, and Chunk Packs. Current Customisation Sync data uses ordinary chunked Metadata in the `ix:` namespace rather than the application-local `PluginDataEntry` interface.
 
 ## Important Files
 

@@ -36,18 +36,32 @@ function writeJson(directory: string, path: string, value: unknown): void {
 }
 
 function runNode(script: string, args: string[], cwd: string, env: Record<string, string> = {}) {
+    // Windows treats environment names case-insensitively; avoid duplicate
+    // inherited npm variables overriding a fixture's explicit version.
+    const overrides = new Set(Object.keys(env).map((key) => key.toLowerCase()));
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !overrides.has(key.toLowerCase())));
     return spawnSync(process.execPath, [script, ...args], {
         cwd,
         encoding: "utf8",
-        env: { ...process.env, ...env },
+        env: { ...inherited, ...env },
     });
 }
 
 function runNpm(args: string[], cwd: string) {
+    const env = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith("npm_package_"))
+    );
+    if (process.platform === "win32" && process.env.npm_execpath) {
+        return spawnSync(process.execPath, [process.env.npm_execpath, ...args], {
+            cwd,
+            encoding: "utf8",
+            env,
+        });
+    }
     return spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", args, {
         cwd,
         encoding: "utf8",
-        env: process.env,
+        env,
     });
 }
 
@@ -378,7 +392,7 @@ describe("version bump", () => {
             expect(packageJson.version).toBe(`1.0.0-beta.0-${workspace}`);
             expect(packageLock.packages[`src/apps/${workspace}`].version).toBe(`1.0.0-beta.0-${workspace}`);
         }
-    });
+    }, 20_000);
 });
 
 describe("workspace version update", () => {

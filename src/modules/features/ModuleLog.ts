@@ -10,7 +10,7 @@ import {
 import { scheduleTask } from "octagonal-wheels/concurrency/task";
 import { fireAndForget, isDirty, throttle } from "@vrtmrz/livesync-commonlib/compat/common/utils";
 import {
-    collectingChunks,
+    chunkFetchCounts,
     pluginScanningCount,
     hiddenFilesEventCount,
     hiddenFilesProcessingCount,
@@ -36,7 +36,11 @@ import {
     formatRemoteActivityStatusLabel,
     getTrackedRequestCount,
 } from "./RemoteActivityStatus.ts";
-import { createMinimumVisibleActivityCount, createPaddedCounterLabel } from "./StatusBarDisplay.ts";
+import {
+    createChunkFetchCounterLabel,
+    createMinimumVisibleActivityCount,
+    createPaddedCounterLabel,
+} from "./StatusBarDisplay.ts";
 import type { LiveSyncCore } from "@/main.ts";
 import { LiveSyncError } from "@vrtmrz/livesync-commonlib/compat/common/LSError";
 import { isValidPath } from "@/common/utils.ts";
@@ -49,6 +53,10 @@ import { MARK_LOG_NETWORK_ERROR, MARK_LOG_SEPARATOR } from "@vrtmrz/livesync-com
 import { NetworkWarningStyles } from "@vrtmrz/livesync-commonlib/compat/common/models/setting.const";
 import { compatGlobal } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
 import { generateReport } from "@/common/reportTool.ts";
+import {
+    ANDROID_LINUX_PATH_COMPONENT_UTF8_WARNING_BOUNDARY,
+    findPathComponentsExceedingUtf8Limit,
+} from "@/common/pathCompatibility.ts";
 
 // This module cannot be a core module because it depends on the Obsidian UI.
 
@@ -136,7 +144,7 @@ export class ModuleLog extends AbstractObsidianModule {
         const labelStorageCount = registerDisplay(
             createPaddedCounterLabel(this.services.replication.storageApplyingCount, `💾`)
         );
-        const labelChunkCount = registerDisplay(createPaddedCounterLabel(collectingChunks, `🧩`));
+        const labelChunkCount = registerDisplay(createChunkFetchCounterLabel(chunkFetchCounts));
         const labelPluginScanCount = registerDisplay(createPaddedCounterLabel(pluginScanningCount, `🔌`));
         const labelConflictProcessCount = registerDisplay(
             createPaddedCounterLabel(this.services.conflict.conflictProcessQueueCount, `🔩`)
@@ -292,6 +300,14 @@ export class ModuleLog extends AbstractObsidianModule {
             if (labels.length > 0) {
                 reasonWarn.push("Some platforms may be unable to process this file correctly: " + labels.join(" "));
             }
+        }
+        const oversizedPathComponents = findPathComponentsExceedingUtf8Limit(thisFile.path);
+        if (oversizedPathComponents.length > 0) {
+            reasonWarn.push(
+                $msg("moduleLog.pathComponentTooLong", {
+                    maxBytes: `${ANDROID_LINUX_PATH_COMPONENT_UTF8_WARNING_BOUNDARY}`,
+                })
+            );
         }
         // Case Sensitivity
         if (this.services.vault.shouldCheckCaseInsensitively()) {

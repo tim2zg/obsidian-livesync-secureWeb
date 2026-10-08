@@ -1,7 +1,7 @@
 import { InjectableConflictService } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableConflictService";
 import { InjectableDatabaseEventService } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableDatabaseEventService";
 import { InjectableFileProcessingService } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableFileProcessingService";
-import { InjectableRemoteService } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableRemoteService";
+import { SecureWebRemoteService } from "@/secureweb/remote";
 import { InjectableReplicationService } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableReplicationService";
 import { InjectableReplicatorService } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableReplicatorService";
 import { InjectableTestService } from "@vrtmrz/livesync-commonlib/compat/services/implements/injectable/InjectableTestService";
@@ -77,7 +77,7 @@ export class ObsidianFileProcessingService extends InjectableFileProcessingServi
 // InjectableReplicationService
 export class ObsidianReplicationService extends InjectableReplicationService<ObsidianServiceContext> {}
 // InjectableRemoteService
-export class ObsidianRemoteService extends InjectableRemoteService<ObsidianServiceContext> {}
+export class ObsidianRemoteService extends SecureWebRemoteService<ObsidianServiceContext> {}
 // InjectableConflictService
 export class ObsidianConflictService extends InjectableConflictService<ObsidianServiceContext> {}
 // InjectableTweakValueService

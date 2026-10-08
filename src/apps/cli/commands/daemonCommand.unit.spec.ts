@@ -1,9 +1,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createServiceContext } from "@vrtmrz/livesync-commonlib/context";
+import { NO_INTERACTION } from "@vrtmrz/livesync-commonlib/replication";
 import { runCommand } from "./runCommand";
 import type { CLIOptions } from "./types";
 
-// Mock performFullScan so daemon tests don't require a real CouchDB connection.
+// Track explicit scans: database preparation owns the daemon startup scan.
 vi.mock("@vrtmrz/livesync-commonlib/compat/serviceFeatures/offlineScanner", () => ({
     performFullScan: vi.fn(async () => true),
 }));
@@ -38,7 +39,7 @@ function createCoreMock() {
                 currentSettings: vi.fn(() => ({ liveSync: true, syncOnStart: false })),
             },
             replication: {
-                replicate: vi.fn(async () => true),
+                replicateUnattended: vi.fn(async () => ({ status: "completed" as const })),
             },
             appLifecycle: {
                 onUnload: {
@@ -87,9 +88,21 @@ const baseContext = {
     },
 } as any;
 
+function createDaemonContext(core: ReturnType<typeof createCoreMock>) {
+    return {
+        ...baseContext,
+        core,
+        replicationScheduling: {
+            setExternalPollingMode: vi.fn(),
+            markInitialOneShotSatisfied: vi.fn(),
+        },
+    } as any;
+}
+
 describe("daemon command", () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+        vi.mocked(offlineScanner.performFullScan).mockClear();
         vi.useFakeTimers();
     });
 
@@ -97,41 +110,31 @@ describe("daemon command", () => {
         vi.useRealTimers();
     });
 
-    it("calls performFullScan during startup", async () => {
+    it("does not repeat the startup scan after initial replication", async () => {
         const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
-        await runCommand(makeDaemonOptions(), { ...baseContext, core });
+        expect(await runCommand(makeDaemonOptions(), createDaemonContext(core))).toBe(true);
 
-        expect(offlineScanner.performFullScan).toHaveBeenCalledTimes(1);
-    });
-
-    it("returns false when performFullScan fails", async () => {
-        const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(false);
-
-        const result = await runCommand(makeDaemonOptions(), { ...baseContext, core });
-
-        expect(result).toBe(false);
+        expect(offlineScanner.performFullScan).not.toHaveBeenCalled();
     });
 
     it("polling mode: calls setTimeout when interval option is set", async () => {
         const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
         const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-        await runCommand(makeDaemonOptions(30), { ...baseContext, core });
+        const context = createDaemonContext(core);
+        await runCommand(makeDaemonOptions(30), context);
 
         expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+        expect(context.replicationScheduling.setExternalPollingMode).toHaveBeenCalledWith(true);
         // Interval should be in milliseconds (30s → 30000ms)
         expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
     });
 
     it("polling mode: applies settings with suspendFileWatching=false before setting interval", async () => {
         const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
-        await runCommand(makeDaemonOptions(10), { ...baseContext, core });
+        await runCommand(makeDaemonOptions(10), createDaemonContext(core));
 
         expect(core.services.setting.applyPartial).toHaveBeenCalledWith(
             expect.objectContaining({ suspendFileWatching: false }),
@@ -142,9 +145,8 @@ describe("daemon command", () => {
 
     it("liveSync mode: calls applyPartial and applySettings", async () => {
         const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
-        await runCommand(makeDaemonOptions(), { ...baseContext, core });
+        await runCommand(makeDaemonOptions(), createDaemonContext(core));
 
         expect(core.services.setting.applyPartial).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -162,9 +164,8 @@ describe("daemon command", () => {
             liveSync: false,
             syncOnStart: false,
         }));
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
-        const result = await runCommand(makeDaemonOptions(), { ...baseContext, core });
+        const result = await runCommand(makeDaemonOptions(), createDaemonContext(core));
 
         expect(result).toBe(true);
         const warningCalls = core.services.context.standardIo.writeStderr.mock.calls.filter(
@@ -180,9 +181,8 @@ describe("daemon command", () => {
             liveSync: true,
             syncOnStart: false,
         }));
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
-        await runCommand(makeDaemonOptions(), { ...baseContext, core });
+        await runCommand(makeDaemonOptions(), createDaemonContext(core));
 
         const warningCalls = core.services.context.standardIo.writeStderr.mock.calls.filter(
             ([chunk]: [string | Uint8Array]) =>
@@ -191,40 +191,50 @@ describe("daemon command", () => {
         expect(warningCalls.length).toBe(0);
     });
 
-    it("calls replicate before performFullScan", async () => {
+    it("completes initial replication before restoring automatic synchronisation", async () => {
         const core = createCoreMock();
         const callOrder: string[] = [];
-        core.services.replication.replicate = vi.fn(async () => {
+        core.services.replication.replicateUnattended = vi.fn(async () => {
             callOrder.push("replicate");
-            return true;
+            return { status: "completed" as const };
         });
-        vi.mocked(offlineScanner.performFullScan).mockImplementation(async () => {
-            callOrder.push("performFullScan");
-            return true;
+        core.services.control.applySettings.mockImplementation(async () => {
+            callOrder.push("restoreSettings");
         });
 
-        await runCommand(makeDaemonOptions(), { ...baseContext, core });
+        const context = createDaemonContext(core);
+        await runCommand(makeDaemonOptions(), context);
 
-        expect(callOrder).toEqual(["replicate", "performFullScan"]);
+        expect(callOrder).toEqual(["replicate", "restoreSettings"]);
+        expect(core.services.replication.replicateUnattended).toHaveBeenCalledWith({
+            trigger: "daemon",
+            interaction: NO_INTERACTION,
+        });
+        expect(context.replicationScheduling.markInitialOneShotSatisfied).toHaveBeenCalledOnce();
     });
 
     it("returns false when initial replication fails", async () => {
         const core = createCoreMock();
-        core.services.replication.replicate = vi.fn(async () => false);
-        vi.mocked(offlineScanner.performFullScan).mockClear();
+        core.services.replication.replicateUnattended = vi.fn(async () => ({
+            status: "failed" as const,
+            error: new Error("initial replication failed"),
+        }));
 
-        const result = await runCommand(makeDaemonOptions(), { ...baseContext, core });
+        const result = await runCommand(makeDaemonOptions(), createDaemonContext(core));
 
         expect(result).toBe(false);
-        // performFullScan should NOT have been called
+        expect(core.services.control.applySettings).not.toHaveBeenCalled();
         expect(offlineScanner.performFullScan).not.toHaveBeenCalled();
+        expect(core.services.replication.replicateUnattended).toHaveBeenCalledWith({
+            trigger: "daemon",
+            interaction: NO_INTERACTION,
+        });
     });
 
     it("polling mode: registers onUnload handler that clears timeout", async () => {
         const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
-        await runCommand(makeDaemonOptions(10), { ...baseContext, core });
+        await runCommand(makeDaemonOptions(10), createDaemonContext(core));
 
         // onUnload handler should have been registered
         expect(core.services.appLifecycle.onUnload.addHandler).toHaveBeenCalledTimes(1);
@@ -238,21 +248,20 @@ describe("daemon command", () => {
 
     it("polling backoff: interval escalates on failure, caps at 300000ms, then halves on recovery", async () => {
         const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
         // startup replicate (call 1) succeeds; poll calls 2–7 fail; call 8 succeeds.
         let callCount = 0;
-        core.services.replication.replicate = vi.fn(async () => {
+        core.services.replication.replicateUnattended = vi.fn(async () => {
             callCount++;
-            if (callCount === 1) return true; // initial startup replicate
+            if (callCount === 1) return { status: "completed" as const }; // initial startup replicate
             if (callCount <= 7) throw new Error("network failure");
-            return true; // recovery
+            return { status: "completed" as const }; // recovery
         });
 
         const baseMs = 30 * 1000;
         const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-        await runCommand(makeDaemonOptions(30), { ...baseContext, core });
+        await runCommand(makeDaemonOptions(30), createDaemonContext(core));
 
         // After runCommand returns the first setTimeout has been scheduled.
         // setTimeoutSpy.mock.calls[0] is the initial schedule (baseMs).
@@ -293,18 +302,17 @@ describe("daemon command", () => {
 
     it("polling error handling: replicate rejection is caught and written to standard error", async () => {
         const core = createCoreMock();
-        vi.mocked(offlineScanner.performFullScan).mockResolvedValue(true);
 
         // Make replicate succeed on the initial call (startup), then fail on the poll.
         let callCount = 0;
-        core.services.replication.replicate = vi.fn(async () => {
+        core.services.replication.replicateUnattended = vi.fn(async () => {
             callCount++;
-            if (callCount === 1) return true; // startup replicate
+            if (callCount === 1) return { status: "completed" as const }; // startup replicate
             throw new Error("network failure");
         });
 
         const intervalMs = 30 * 1000;
-        await runCommand(makeDaemonOptions(30), { ...baseContext, core });
+        await runCommand(makeDaemonOptions(30), createDaemonContext(core));
 
         // Advance time to trigger the first poll callback and flush its async work.
         await vi.advanceTimersByTimeAsync(intervalMs);

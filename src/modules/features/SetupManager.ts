@@ -1,6 +1,5 @@
 import {
     type BucketSyncSetting,
-    type EncryptionSettings,
     type ObsidianLiveSyncSettings,
     type P2PSyncSetting,
     LOG_LEVEL_NOTICE,
@@ -36,6 +35,8 @@ import type {
     SetupRemoteCouchDBResultType,
     SetupRemoteCouchDBInitialData,
     SetupRemoteE2EEResultType,
+    SetupRemoteE2EEInitialData,
+    SetupRemoteP2PInitialData,
     SetupRemoteP2PResultType,
     SetupRemoteResultType,
     UseSetupURIResultType,
@@ -48,11 +49,26 @@ import {
     type SetupInitialisationMode,
 } from "@/serviceFeatures/setupObsidian/setupActivationLifecycle.ts";
 import { isP2PMainRemote } from "@/common/remoteConfiguration.ts";
+import type { P2PConnectionProbeAdmission } from "@vrtmrz/livesync-commonlib/p2p";
 
 function copySettingsForRemoteProfileUpdate(settings: ObsidianLiveSyncSettings): ObsidianLiveSyncSettings {
     return {
         ...settings,
         remoteConfigurations: { ...(settings.remoteConfigurations ?? {}) },
+    };
+}
+
+function normaliseImportedIdDerivationSettings(settings: ObsidianLiveSyncSettings): ObsidianLiveSyncSettings {
+    // Setup URIs are complete imports even when their encoder omitted default-valued fields.
+    // Fill each missing half so a receiving device cannot supply the unrelated saved key.
+    return {
+        ...settings,
+        idDerivationVersion: Object.prototype.hasOwnProperty.call(settings, "idDerivationVersion")
+            ? settings.idDerivationVersion
+            : 0,
+        idDerivationKey: Object.prototype.hasOwnProperty.call(settings, "idDerivationKey")
+            ? settings.idDerivationKey
+            : "",
     };
 }
 
@@ -94,12 +110,34 @@ export type ApplySettingsWithInitialisationChoiceOptions = {
  * Setup Manager to handle onboarding and configuration setup
  */
 export class SetupManager extends AbstractModule {
+    private p2pSetupConnectionProbe?: P2PConnectionProbeAdmission;
+
     // /**
     //  * Dialog manager for handling Svelte dialogs
     //  */
     // private dialogManager: SvelteDialogManager = new SvelteDialogManager(this.plugin);
     get dialogManager() {
         return this.services.UI.dialogManager;
+    }
+
+    /** Bind the stable P2P owner's probe view to host-owned Setup dialogues. */
+    registerP2PSetupConnectionProbe(connectionProbe: P2PConnectionProbeAdmission): void {
+        if (this.p2pSetupConnectionProbe && this.p2pSetupConnectionProbe !== connectionProbe) {
+            throw new Error("The P2P Setup connection probe has already been registered.");
+        }
+        this.p2pSetupConnectionProbe = connectionProbe;
+    }
+
+    /** Open P2P Setup with the owner-arbitrated connection-probe boundary. */
+    openP2PSetup(settings: P2PSyncSetting): Promise<SetupRemoteP2PResultType> {
+        const connectionProbe = this.p2pSetupConnectionProbe;
+        if (!connectionProbe) {
+            throw new Error("The P2P Setup connection probe is not available.");
+        }
+        return this.dialogManager.openWithExplicitCancel<SetupRemoteP2PResultType, SetupRemoteP2PInitialData>(
+            SetupRemoteP2P,
+            { settings, connectionProbe }
+        );
     }
 
     /**
@@ -195,7 +233,7 @@ export class SetupManager extends AbstractModule {
             return false;
         }
         this._log("Setup URI dialog closed.", LOG_LEVEL_VERBOSE);
-        return await this.onConfirmApplySettingsFromWizard(newSetting, userMode);
+        return await this.onConfirmApplySettingsFromWizard(normaliseImportedIdDerivationSettings(newSetting), userMode);
     }
 
     /**
@@ -280,10 +318,7 @@ export class SetupManager extends AbstractModule {
         currentSetting: ObsidianLiveSyncSettings,
         activate = true
     ): Promise<boolean> {
-        const p2pConf = await this.dialogManager.openWithExplicitCancel<SetupRemoteP2PResultType, P2PSyncSetting>(
-            SetupRemoteP2P,
-            currentSetting
-        );
+        const p2pConf = await this.openP2PSetup(currentSetting);
         if (p2pConf === "cancelled") {
             this._log("Manual configuration cancelled.", LOG_LEVEL_NOTICE);
             return await this.onOnboard(userMode);
@@ -307,13 +342,43 @@ export class SetupManager extends AbstractModule {
      * @returns
      */
     async onlyE2EEConfiguration(userMode: UserMode, currentSetting: ObsidianLiveSyncSettings): Promise<boolean> {
-        const e2eeConf = await this.dialogManager.openWithExplicitCancel<SetupRemoteE2EEResultType, EncryptionSettings>(
+        const e2eeConf = await this.dialogManager.openWithExplicitCancel<
+            SetupRemoteE2EEResultType,
+            SetupRemoteE2EEInitialData
+        >(
             SetupRemoteE2EE,
-            currentSetting
+            { settings: currentSetting, newVault: userMode === UserMode.NewUser }
         );
         if (e2eeConf === "cancelled") {
             this._log("E2EE configuration cancelled.", LOG_LEVEL_NOTICE);
             return false;
+        }
+        const onlyInternalMetadataPreferenceChanged =
+            currentSetting.encryptInternalMetadata !== e2eeConf.encryptInternalMetadata &&
+            currentSetting.encrypt === e2eeConf.encrypt &&
+            currentSetting.passphrase === e2eeConf.passphrase &&
+            currentSetting.E2EEAlgorithm === e2eeConf.E2EEAlgorithm &&
+            currentSetting.usePathObfuscation === e2eeConf.usePathObfuscation &&
+            currentSetting.idDerivationVersion === e2eeConf.idDerivationVersion &&
+            currentSetting.idDerivationKey === e2eeConf.idDerivationKey;
+        if (userMode === UserMode.Update && onlyInternalMetadataPreferenceChanged) {
+            if (e2eeConf.encryptInternalMetadata && currentSetting.remoteType === REMOTE_COUCHDB) {
+                const proceed = "Enable without rebuilding — update every other device first";
+                const choice = await this.core.confirm.askSelectStringDialogue(
+                    "A manual remote Rebuild is strongly recommended to protect existing file properties. " +
+                        "Before continuing without rebuilding, update every other synchronising device to a version " +
+                        "which supports this option, including devices currently running LiveSync. " +
+                        "Existing properties remain unchanged until they are rewritten or rebuilt.",
+                    [proceed, "Cancel"],
+                    { title: "Encrypt internal file Properties", defaultAction: "Cancel" }
+                );
+                if (choice !== proceed) return false;
+            }
+            await this.services.setting.applyPartial(
+                { encryptInternalMetadata: e2eeConf.encryptInternalMetadata },
+                true
+            );
+            return true;
         }
         const newSetting = {
             ...currentSetting,
@@ -329,9 +394,12 @@ export class SetupManager extends AbstractModule {
      * @returns
      */
     async onConfigureManually(originalSetting: ObsidianLiveSyncSettings, userMode: UserMode): Promise<boolean> {
-        const e2eeConf = await this.dialogManager.openWithExplicitCancel<SetupRemoteE2EEResultType, EncryptionSettings>(
+        const e2eeConf = await this.dialogManager.openWithExplicitCancel<
+            SetupRemoteE2EEResultType,
+            SetupRemoteE2EEInitialData
+        >(
             SetupRemoteE2EE,
-            originalSetting
+            { settings: originalSetting, newVault: userMode === UserMode.NewUser }
         );
         if (e2eeConf === "cancelled") {
             this._log("Manual configuration cancelled.", LOG_LEVEL_NOTICE);
@@ -475,7 +543,13 @@ export class SetupManager extends AbstractModule {
      * @returns Promise that resolves to true if settings applied successfully, false otherwise
      */
     async decodeQR(qr: string) {
-        const newSettings = decodeSettingsFromQRCodeData(qr);
+        let newSettings: ObsidianLiveSyncSettings;
+        try {
+            newSettings = normaliseImportedIdDerivationSettings(decodeSettingsFromQRCodeData(qr));
+        } catch {
+            this._log("The QR configuration could not be decoded or contains unsupported settings.", LOG_LEVEL_NOTICE);
+            return false;
+        }
         return await this.onConfirmApplySettingsFromWizard(newSettings, UserMode.Unknown);
     }
 

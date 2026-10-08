@@ -115,7 +115,6 @@ export async function openLiveSyncSettings(page: Page, timeoutMs = 10_000): Prom
         const setting = host.app?.setting;
         if (setting === undefined) throw new Error("Obsidian settings are unavailable");
         setting.open();
-        setting.openTabById("obsidian-livesync");
     });
 
     const deadline = Date.now() + timeoutMs;
@@ -136,6 +135,16 @@ export async function openLiveSyncSettings(page: Page, timeoutMs = 10_000): Prom
         if (settingsPage === undefined) await new Promise((resolve) => setTimeout(resolve, 100));
     }
     if (settingsPage === undefined) throw new Error("Obsidian did not open its settings interface");
+
+    // Obsidian may discard a tab selection made before the settings modal has
+    // finished opening. Select the plug-in only after a settings renderer is
+    // visible so slower real-runtime sessions cannot remain on the About tab.
+    await hostPage.evaluate(() => {
+        const host = globalThis as ObsidianSettingsHost;
+        const setting = host.app?.setting;
+        if (setting === undefined) throw new Error("Obsidian settings are unavailable");
+        setting.openTabById("obsidian-livesync");
+    });
 
     const dialogue = settingsPage.locator(".modal.mod-settings:visible").last();
     const imperativeRoot = dialogue.locator(".sls-setting:visible").last();
@@ -270,26 +279,36 @@ export async function allowPendingObsidianTestVaultOpenAction(
 export async function captureObsidianElement(
     port: number,
     filename: string,
-    resolveElement: (page: Page) => Locator | Promise<Locator>
+    resolveElement: (page: Page) => Locator | Promise<Locator>,
+    timeoutMs = 10_000
 ): Promise<string> {
     const outputDirectory = process.env.E2E_OBSIDIAN_DIAGNOSTICS_DIR ?? "/tmp/obsidian-livesync-e2e";
     const screenshotPath = join(outputDirectory, filename);
     await mkdir(dirname(screenshotPath), { recursive: true });
 
     await withObsidianPage(port, async (page) => {
-        try {
-            const element = await resolveElement(page);
-            await element.waitFor({ state: "visible", timeout: 10000 });
-            await element.screenshot({
-                path: screenshotPath,
-                animations: "disabled",
-                style: ".notice-container { visibility: hidden !important; }",
-            });
-        } catch (error) {
-            const failurePath = screenshotPath.replace(/\.png$/u, ".failure.png");
-            await page.screenshot({ path: failurePath, fullPage: true });
-            console.error(`UI element failure screenshot: ${failurePath}`);
-            throw error;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                const element = await resolveElement(page);
+                await element.waitFor({ state: "visible", timeout: timeoutMs });
+                await element.screenshot({
+                    path: screenshotPath,
+                    animations: "disabled",
+                    style: ".notice-container { visibility: hidden !important; }",
+                });
+                return;
+            } catch (error) {
+                const detachedDuringCapture =
+                    error instanceof Error && error.message.includes("not attached to the DOM");
+                if (detachedDuringCapture && attempt < 2) {
+                    await page.waitForTimeout(50);
+                    continue;
+                }
+                const failurePath = screenshotPath.replace(/\.png$/u, ".failure.png");
+                await page.screenshot({ path: failurePath, fullPage: true });
+                console.error(`UI element failure screenshot: ${failurePath}`);
+                throw error;
+            }
         }
     });
 
