@@ -1099,13 +1099,13 @@ export const transportLog = (line: string): void => {
  * native `requestUrl` bypasses CORS and third parties rely on that, so
  * non-gateway traffic must never be re-routed through `fetch`.
  */
-export function installSecureWebRequestUrlShim(getPlugin: () => any): void {
-    if (typeof window === "undefined") return;
+export function installSecureWebRequestUrlShim(getPlugin: () => any): () => void {
+    if (typeof window === "undefined") return () => {};
     const win = window as any;
-    if (win.__secureWebRequestUrlShimInstalled) return;
-    if (typeof win.requestUrl !== "function") return;
+    if (typeof win.requestUrl !== "function") return () => {};
     win.__secureWebRequestUrlShimInstalled = true;
-    const original = win.requestUrl.bind(win);
+    const original = win.__secureWebRawRequestUrl ?? win.requestUrl.bind(win);
+    win.__secureWebRawRequestUrl = original;
 
     const isGatewayBound = (rawUrl: string): boolean => {
         const urlStr = String(rawUrl);
@@ -1132,7 +1132,7 @@ export function installSecureWebRequestUrlShim(getPlugin: () => any): void {
         }
     };
 
-    win.requestUrl = async (req: any) => {
+    const sealedRequest = async (req: any) => {
         const url = typeof req === "string" ? req : req?.url;
         if (typeof url !== "string" || !isGatewayBound(url) || typeof win.fetch !== "function") {
             return original(req);
@@ -1166,17 +1166,24 @@ export function installSecureWebRequestUrlShim(getPlugin: () => any): void {
             throw err;
         }
     };
+    win.requestUrl = sealedRequest;
     transportLog("[requesturl-shim] installed");
+    return () => {
+        if (win.requestUrl === sealedRequest) {
+            win.requestUrl = original;
+            win.__secureWebRequestUrlShimInstalled = false;
+        }
+    };
 }
 
 export function installSecureWebXhrShim(
     getSettings: () => SecureWebSettingsLike | undefined
-): void {
+): () => void {
     const win = (compatGlobal as any).window;
-    if (!win || !win.XMLHttpRequest) return;
-    if (win.__secureWebXhrSealedInstalled) return;
+    if (!win || !win.XMLHttpRequest) return () => {};
     win.__secureWebXhrSealedInstalled = true;
-    const OriginalXHR = win.XMLHttpRequest;
+    const OriginalXHR = win.__secureWebRawXHR ?? win.XMLHttpRequest;
+    win.__secureWebRawXHR = OriginalXHR;
     transportLog(`[xhr-shim] installed (original=${typeof OriginalXHR})`);
 
     const matchesSealedRoute = (rawUrl: string): boolean => {
@@ -1360,4 +1367,10 @@ export function installSecureWebXhrShim(
     }
 
     win.XMLHttpRequest = SealedXHR;
+    return () => {
+        if (win.XMLHttpRequest === SealedXHR) {
+            win.XMLHttpRequest = OriginalXHR;
+            win.__secureWebXhrSealedInstalled = false;
+        }
+    };
 }

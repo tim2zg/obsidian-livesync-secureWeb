@@ -153,9 +153,9 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
     constructor(app: App, manifest: PluginManifest) {
         super(app, manifest);
         setSecureWebSettingsProvider(() => this.core?.settings);
-        installGlobalSecureWebFetch(() => this);
-        installSecureWebXhrShim(() => this.core?.settings);
-        installSecureWebRequestUrlShim(() => this);
+        this.register(installGlobalSecureWebFetch(() => this));
+        this.register(installSecureWebXhrShim(() => this.core?.settings));
+        this.register(installSecureWebRequestUrlShim(() => this));
         this.registerObsidianProtocolHandler("livesync-secureweb", (params) => { void this.handleSecureWebSetup(params); });
         // Maybe no more need to setNoticeClass, but for safety, set it in the constructor of the main plugin class.
         // TODO: remove this.

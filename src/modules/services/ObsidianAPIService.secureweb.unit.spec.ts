@@ -232,4 +232,36 @@ describe("SecureWeb runtime Security Seed regression", () => {
         expect(native).toHaveBeenCalledOnce();
         expect(fetch).not.toHaveBeenCalled();
     });
+    it("uses the new plug-in settings after an automatic update reload", async () => {
+        const env = createEnvironment("before-reload");
+        const settings = { ...env.settings, couchDB_URI: "https://after-reload.example.test" };
+        env.settings.couchDB_PASSWORD = "outdated-profile-fixture";
+        const plugin = { core: { settings } } as unknown as ObsidianLiveSyncPlugin;
+        setSecureWebSettingsProvider(() => settings);
+        installGlobalSecureWebFetch(() => plugin);
+        installSecureWebRequestUrlShim(() => plugin);
+        installSecureWebXhrShim(() => settings);
+        const response = await env.API.nativeFetch(settings.couchDB_URI + seedPath);
+        expect(await response.json()).toEqual(seed);
+        expect(env.wireCalls[env.wireCalls.length - 1].origin).toBe(settings.couchDB_URI);
+        expect(env.innerRequests).toHaveLength(1);
+    });
+
+    it.each(["fetch", "requestUrl", "XMLHttpRequest"] as const)("reload cleanup preserves the latest %s hook", (key) => {
+        const env = createEnvironment("hook-ownership");
+        const plugin = { core: { settings: env.settings } } as unknown as ObsidianLiveSyncPlugin;
+        const install = key === "fetch" ? () => installGlobalSecureWebFetch(() => plugin)
+            : key === "requestUrl" ? () => installSecureWebRequestUrlShim(() => plugin)
+                : () => installSecureWebXhrShim(() => env.settings);
+        const cleanupOld = install();
+        const older = env.win[key];
+        const cleanupNew = install();
+        const newer = env.win[key];
+        expect(newer).not.toBe(older);
+        cleanupOld();
+        expect(env.win[key]).toBe(newer);
+        cleanupNew();
+        expect(env.win[key]).not.toBe(newer);
+    });
+
 });

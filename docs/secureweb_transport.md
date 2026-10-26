@@ -10,7 +10,8 @@ is required. V1 gateway-terminating envelopes are no longer supported.
 Install **BRAT** from Obsidian's Community plugins on each device. In BRAT,
 choose **Add beta plugin**, enter `tim2zg/obsidian-livesync-secureWeb`, and
 select the latest version. Enable **Auto-update plugins at startup**. The
-repository is public, so no GitHub access token is required.
+repository is public, so no GitHub access token is required. Network hooks
+are refreshed when BRAT reloads the plug-in and released when it unloads.
 
 The fork retains the `obsidian-livesync` plug-in ID so existing settings and
 App Tokens remain available. Use BRAT to update this installation; Obsidian's

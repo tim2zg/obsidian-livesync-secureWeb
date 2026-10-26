@@ -18,6 +18,9 @@ Earlier releases remain available in the 1.0 release history, the 1.0 preview hi
 
 ### SecureWeb fork
 
+- Automatic-update reloads refresh network hooks and remove only the hooks
+  owned by the unloading plug-in instance.
+
 - Large attachment reads use smaller sealed batches to avoid gateway buffer
   errors. On-demand fetching accepts a concurrency of one for tablets.
 

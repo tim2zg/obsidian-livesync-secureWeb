@@ -7,18 +7,17 @@ import {
     isGatewayInfrastructureRequest,
 } from "./envelope";
 
-export function installGlobalSecureWebFetch(getPlugin: () => ObsidianLiveSyncPlugin | undefined) {
-    if (typeof window === "undefined") return;
+export function installGlobalSecureWebFetch(getPlugin: () => ObsidianLiveSyncPlugin | undefined): () => void {
+    if (typeof window === "undefined") return () => {};
     const win = window as any;
-    if (win.__secureWebFetchInstalled) return;
     win.__secureWebFetchInstalled = true;
-    const origFetch = win.fetch.bind(window);
+    const origFetch = win.__secureWebRawFetch ?? win.fetch.bind(window);
     // Hand the pre-interception fetch to the transport: the sealed flow's
     // own control calls (session exchange) must bypass this interceptor,
     // or they recurse into the sealed flow again.
     win.__secureWebRawFetch = origFetch;
 
-    win.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const sealedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (isGatewayInfrastructureRequest(input, init)) return origFetch(input, init);
         const plugin = getPlugin();
@@ -80,5 +79,12 @@ export function installGlobalSecureWebFetch(getPlugin: () => ObsidianLiveSyncPlu
             return await secureFetch(input, init);
         }
         return origFetch(input, init);
+    };
+    win.fetch = sealedFetch;
+    return () => {
+        if (win.fetch === sealedFetch) {
+            win.fetch = origFetch;
+            win.__secureWebFetchInstalled = false;
+        }
     };
 }
