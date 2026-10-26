@@ -1,3 +1,8 @@
+> **SecureWeb fork:** This repository provides the V2 encrypted SecureWeb
+> connector for Self-hosted LiveSync. Install and receive automatic updates
+> with [BRAT](docs/secureweb_transport.md#install-and-update-with-brat).
+> A V2-capable SecureWeb gateway is required.
+
 # Self-hosted LiveSync
 [Japanese docs](./README_ja.md) - [Chinese docs](./README_cn.md).
 

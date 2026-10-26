@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
+      actions: read
       contents: write
       id-token: write
       attestations: write
@@ -35,17 +36,33 @@ jobs:
       with:
         node-version: '24.x'
     - name: Validate release
+      id: validate
       env:
         TAG: ${{ inputs.tag }}
       run: |
         set -euo pipefail
         node utils/release-notes.mjs validate "${TAG}"
         HEAD_SHA="$(git rev-parse HEAD)"
+        echo "sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
         TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
         if [[ "${HEAD_SHA}" != "${TAG_SHA}" ]]; then
           echo "Checked-out commit is ${HEAD_SHA}, but tag ${TAG} points to ${TAG_SHA}." >&2
           exit 1
         fi
+    - name: Require successful CI for this release commit
+      uses: actions/github-script@v8
+      env:
+        RELEASE_SHA: ${{ steps.validate.outputs.sha }}
+      with:
+        script: |
+          const { pathToFileURL } = require('node:url');
+          const { assertReleaseCI } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/utils/release-ci.mjs`).href);
+          const { data } = await github.rest.actions.listWorkflowRuns({
+            ...context.repo, workflow_id: 'unit-ci.yml', event: 'push',
+            head_sha: process.env.RELEASE_SHA, per_page: 100,
+          });
+          const run = assertReleaseCI(data.workflow_runs, process.env.RELEASE_SHA);
+          core.info(`Release checks passed: ${run.html_url}`);
     # Build the plugin
     - name: Build
       id: build

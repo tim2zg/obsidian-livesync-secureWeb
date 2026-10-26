@@ -12,6 +12,10 @@ Earlier releases remain available in the 1.0 release history, the 1.0 preview hi
 
 ## Unreleased
 
+## 1.0.40-secureweb.1
+
+26th October, 2026
+
 ### SecureWeb fork
 
 - Large attachment reads use smaller sealed batches to avoid gateway buffer

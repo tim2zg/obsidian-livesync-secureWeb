@@ -5,6 +5,26 @@ sealed to the selected service, then wrapped in a routing envelope for the
 gateway. Replies are sealed to a fresh client reply key. A V2-capable gateway
 is required. V1 gateway-terminating envelopes are no longer supported.
 
+## Install and update with BRAT
+
+Install **BRAT** from Obsidian's Community plugins on each device. In BRAT,
+choose **Add beta plugin**, enter `tim2zg/obsidian-livesync-secureWeb`, and
+select the latest version. Enable **Auto-update plugins at startup**. The
+repository is public, so no GitHub access token is required.
+
+The fork retains the `obsidian-livesync` plug-in ID so existing settings and
+App Tokens remain available. Use BRAT to update this installation; Obsidian's
+ordinary community listing for that ID points to the upstream project. Each
+device retains its own `data.json`; release assets contain only the plug-in
+runtime files. Back up the existing plug-in directory before the first
+upgrade. A previous GitHub release can be selected in BRAT for rollback;
+restore the matching settings backup if a later version migrated them.
+
+Release publication is explicit. The release workflow requires successful
+CI for the exact tagged commit, runs the credential and transport checks
+before building, and attests the runtime assets. Upstream merges become
+updates after they have passed these checks and a release is published.
+
 ## Configure a gateway
 
 Use the SecureWeb setup link supplied by your operator. It configures the
