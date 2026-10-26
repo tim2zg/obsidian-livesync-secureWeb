@@ -64,9 +64,10 @@ livesync-cli [database-path] [command] [args...]
 
 - `database-path`: Path to the directory where `.livesync` folder and `settings.json` are (or will be) located.
     - Note: In previous versions, this was referred to as the "vault" path. Now it is clearly distinguished from the actual vault (the directory containing your `.md` files).
-- `--vault <path>` / `-V <path>`: (daemon/mirror only) Path to the vault directory containing `.md` files.
+- `--vault <path>` / `-V <path>`: (daemon/mirror/rebuild/fetch) Path to the Vault directory containing `.md` files.
     - Allows the PouchDB database directory and the actual vault directory to be different locations.
     - For `mirror` command, the positional `[vault-path]` argument takes precedence over `--vault`.
+- `--force` / `-f`: Required by `rebuild` and `fetch` because they replace a database. It also retains its existing `init-settings` overwrite behaviour.
 - `--write-settings`: Write setting migrations and other lasting changes after the command succeeds.
     - `init-settings` writes its target file. `setup`, `remote-add`, `remote-rm`, `remote-set`, and `remote-activate` write their settings changes without this option.
     - All remaining commands leave the settings file unchanged by default.
@@ -82,6 +83,9 @@ livesync-cli [database-path] [command] [args...]
     - If `vault-path` is provided, the CLI will synchronise the database with files in the vault directory.
     - If `vault-path` is omitted, it defaults to `database-path` (compatibility mode).
     - Use this command to keep your local `.md` files in sync with the database.
+- `rebuild`: Rebuild the local and remote databases from the selected Vault. This replaces existing local and remote database state and requires `--force`.
+    - This command may select a new local database suffix. Add `--write-settings` if later CLI commands should use the resulting database selection; otherwise the existing settings file remains unchanged.
+- `fetch`: Replace the local database with the configured remote state, then reflect fetched files to the selected Vault. Existing local database state is discarded, so this command requires `--force`.
 - `ls [prefix]`: List files currently stored in the local database.
 - `push <src> <dst>`: Push a local file `<src>` into the database at path `<dst>`.
 - `pull <src> <dst>`: Pull a file `<src>` from the database into local file `<dst>`.
@@ -109,6 +113,12 @@ livesync-cli ./my-db sync
 
 # Mirroring to your actual Obsidian vault
 livesync-cli ./my-db mirror /path/to/obsidian-vault
+
+# Rebuild local and remote databases from an authoritative Vault
+livesync-cli ./my-db --vault /path/to/obsidian-vault rebuild --force --write-settings
+
+# Replace the local database and Vault files from the configured remote
+livesync-cli ./my-db --vault /path/to/obsidian-vault fetch --force --write-settings
 
 # Manual file operations
 livesync-cli ./my-db push ./note.md folder/note.md
@@ -192,6 +202,8 @@ The generated systemd unit uses the wrapper's absolute path and does not depend 
 **Manual setup** — if you prefer to manage the unit yourself, copy `deploy/livesync-cli.service`, replace `LIVESYNC_BIN` and `LIVESYNC_VAULT_PATH` with the actual binary path and Vault path, then install it in the appropriate systemd directory.
 
 ### Docker
+
+CLI-only Docker patches use their full release tag, such as `ghcr.io/vrtmrz/livesync-cli:1.0.36-patch1-cli`. Patch and RC images receive version and SHA-qualified tags. The `latest` and major-minor tags are updated by ordinary stable releases. CLI image versions come from the release Git tag, so a CLI-only patch does not require changing the Obsidian plug-in version.
 
 A Docker image is provided for headless / server deployments. Build from the repository root:
 
@@ -367,6 +379,36 @@ The CLI uses the same settings format as the Obsidian plug-in. Create a `.livesy
 - `couchDB_DBNAME`: Database name
 - `isConfigured`: Set to `true` after configuration
 
+#### Unicode path identity
+
+The `pathNormalizationVersion` setting controls how file paths identify
+Metadata documents when using CouchDB. An absent value or `0` keeps the legacy
+identity. Version `1` uses Unicode Normalization Form C (NFC) for Metadata IDs
+and path comparison keys. It does not rewrite `Metadata.path`, rename existing
+files, or change Chunks or file content. `handleFilenameCaseSensitive` remains
+an independent case-handling setting; the CLI resolves NFC-equivalent names
+even when case-sensitive handling is enabled.
+
+When the CLI resolves an existing path, it uses the actual spelling of each
+matching file or directory for reads, writes, deletes, `stat` calls, directory
+creation, and renames. If a path component is missing, it uses the actual
+existing parent and preserves the spelling received for the new component. If
+a file or any parent directory has multiple candidates for the same logical
+key after NFC and the existing case rule, the CLI warns and refuses the
+operation. It does not choose a candidate based on directory order, merge
+entries, or rename them.
+
+Version `1` requires a coordinated Rebuild and Fetch; changing the setting by
+itself does not migrate a database. Update every participating client, stop
+synchronisation, and back up a complete authoritative Vault. Set
+`pathNormalizationVersion` to `1` on the source client, then run `rebuild`
+with `--force --write-settings`. Set the same value on each remaining CLI
+client, then run `fetch` with `--force --write-settings`. Use **Overwrite
+Server Data with This Device's Files** and **Reset Synchronisation on This
+Device** for the corresponding Obsidian Rebuild and Fetch operations. Resolve
+any ambiguous names before reconstruction. Version `1` is supported with
+CouchDB only; do not resume a legacy client against the rebuilt database.
+
 ### Command-line Reference
 
 ```
@@ -379,11 +421,11 @@ Arguments:
 
 Options:
   --settings, -s <path>   Path to settings file (default: .livesync/settings.json in local database directory)
-  --force, -f             Overwrite existing file on init-settings
+  --force, -f             Required by rebuild/fetch; overwrite existing file on init-settings
   --verbose, -v           Enable verbose logging
   --debug, -d             Enable debug logging (includes verbose)
   --interval <N>, -i <N>  (daemon only) Poll CouchDB every N seconds instead of using the _changes feed
-  --vault <path>, -V <path>  (daemon/mirror) Path to vault directory, decoupled from database-path
+  --vault <path>, -V <path>  (daemon/mirror/rebuild/fetch) Path to vault directory, decoupled from database-path
   --write-settings         Write setting changes after a successful command
   --compat-remote-admin-exit-zero
                            Preserve the former zero exit code when remote-administration verification fails
@@ -396,6 +438,8 @@ Commands:
   p2p-peers <timeout>     Show discovered peers as [peer]<TAB><peer-id><TAB><peer-name>
   p2p-sync <peer> <timeout>   Synchronise with specified peer-id or peer-name
   p2p-host                Start P2P host mode and wait until interrupted (Ctrl+C)
+  rebuild                 Rebuild local and remote databases from the selected Vault (requires --force)
+  fetch                   Replace the local database with remote state and reflect it to the Vault (requires --force)
   push <src> <dst>        Push local file <src> into local database path <dst>
   pull <src> <dst>        Pull file <src> from local database into local file <dst>
   pull-rev <src> <dst> <rev>   Pull specific revision <rev> into local file <dst>
@@ -451,6 +495,44 @@ Use this command to select a target for `p2p-sync`.
 - Other peers can discover and synchronise with this host while it is running.
 - Stop the host with `Ctrl+C`.
 - In CLI mode, behaviour is non-interactive and acceptance follows settings.
+
+After the local database is ready, the host restores its configured P2P settings
+before connecting. It opens the connection explicitly, including when
+`P2P_AutoStart` is `false`.
+
+- `P2P_AutoSyncPeers` selects peers for an initial bidirectional synchronisation.
+- `P2P_AutoWatchPeers` selects peers whose later announced changes the host fetches.
+  Those peers must enable `P2P_AutoBroadcast`.
+- `P2P_AutoBroadcast` enables announcements of changes in the host's local database.
+  Clients must follow the host to fetch those changes automatically.
+- Headless operation requires accepted peers. Configure `P2P_AutoAcceptingPeers`
+  or retain an existing acceptance decision; selecting a peer for automatic
+  synchronisation does not itself accept that peer.
+
+For example, a P2P-only host for peers named `Desktop` and `android` can use:
+
+```json
+{
+  "remoteType": "ONLY_P2P",
+  "P2P_Enabled": true,
+  "P2P_IsHeadless": true,
+  "P2P_AutoStart": false,
+  "P2P_AutoBroadcast": true,
+  "P2P_AutoAcceptingPeers": "Desktop,android",
+  "P2P_AutoSyncPeers": "Desktop,android",
+  "P2P_AutoWatchPeers": "Desktop,android"
+}
+```
+
+Add these fields to settings which already contain the shared P2P room,
+passphrase, signalling relay, and this host's unique peer name. Configure the
+clients to accept, synchronise with, and follow the host, and to announce their
+own changes. With a persistent local database, the host can retain received
+changes for a client which connects later.
+
+`p2p-host` exchanges database content. It does not scan or watch external Vault
+file edits. Single-operation CLI commands keep automatic synchronisation
+suspended during their execution.
 
 ##### info
 
@@ -637,8 +719,8 @@ src/apps/cli/
 │   └── ServiceFileAccessImpl.ts
 ├── services/
 │   ├── NodeKeyValueDBService.ts
-│   ├── NodeServiceHub.ts
-│   └── NodeSettingService.ts
+│   ├── NodeLocalStorage.ts
+│   └── NodeServiceHub.ts
 ├── test/
 │   ├── test-e2e-two-vaults-common.sh
 │   ├── test-e2e-two-vaults-matrix.sh

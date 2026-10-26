@@ -7,6 +7,7 @@ import {
     type ObsidianLiveSyncSettings,
     LOG_LEVEL_VERBOSE,
 } from "@vrtmrz/livesync-commonlib/compat/common/types";
+import { OPEN_JOINED_DEVICES } from "@/serviceFeatures/joinedDevicesCommand";
 import { Menu, type ButtonComponent } from "@/deps.ts";
 import { $msg } from "@/common/translation";
 import { LiveSyncSetting as Setting } from "./LiveSyncSetting.ts";
@@ -101,6 +102,22 @@ export function paneRemoteConfig(
     paneEl: HTMLElement,
     { addPanel }: PageFunctions
 ): void {
+    new Setting(paneEl)
+        .setName($msg("Joined devices"))
+        .setDesc($msg("Review device records for the active CouchDB or Object Storage connection."))
+        .addButton((button) =>
+            button.setButtonText($msg("Review devices")).onClick(async () => {
+                const result = await this.services.UI.commands.invoke(OPEN_JOINED_DEVICES, undefined);
+                if (result.status === "unavailable" || result.value === "unavailable") {
+                    this.services.API.addLog(
+                        $msg(
+                            "Joined devices are available after database startup with an active CouchDB or Object Storage connection."
+                        ),
+                        LOG_LEVEL_NOTICE
+                    );
+                }
+            })
+        );
     {
         /* E2EE */
         const E2EEInitialProps = {
@@ -112,10 +129,10 @@ export function paneRemoteConfig(
                 info: getE2EEConfigSummary(this.editingSettings),
             });
         };
-        void addPanel(paneEl, "E2EE Configuration", () => {}).then((paneEl) => {
+        void addPanel(paneEl, $msg("E2EE Configuration"), () => {}).then((paneEl) => {
             const infoPanel = new SveltePanel(InfoPanel, paneEl, E2EESummaryWritable);
             this.lifetimeComponent.register(() => infoPanel.destroy());
-            const setupButton = setSettingAdditionalActionsState(new Setting(paneEl).setName("Configure E2EE"));
+            const setupButton = setSettingAdditionalActionsState(new Setting(paneEl).setName($msg("Configure E2EE")));
             setupButton
                 .addButton((button) =>
                     setButtonDestructiveState(button)
@@ -146,7 +163,7 @@ export function paneRemoteConfig(
                             }
                             updateE2EESummary();
                         })
-                        .setButtonText("Configure")
+                        .setButtonText($msg("Configure"))
                 )
                 .addButton((button) =>
                     setButtonDestructiveState(setButtonAdditionalActionState(button))
@@ -156,7 +173,7 @@ export function paneRemoteConfig(
                             await setupManager.onConfigureManually(originalSettings, UserMode.Update);
                             updateE2EESummary();
                         })
-                        .setButtonText("Configure And Change Remote")
+                        .setButtonText($msg("Configure And Change Remote"))
                 );
             updateE2EESummary();
         });

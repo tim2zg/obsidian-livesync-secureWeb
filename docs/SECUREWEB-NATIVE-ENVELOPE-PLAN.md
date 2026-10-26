@@ -1,5 +1,8 @@
 # SecureWeb LiveSync Fork — Native Envelope Transport Fix Plan
 
+> Historical design note. The implemented V2 transport and current validation
+> commands are described in [SecureWeb transport](secureweb_transport.md).
+
 > Goal: make the plugin actually **run and sync** through the SecureWeb
 > gateway — with **zero plaintext fallback** and **no WASM dependency**.
 > The envelope (X-Wing HPKE seal/open + framing) is implemented natively
@@ -256,7 +259,7 @@ Config surface (keep it minimal, in the existing LiveSync settings):
      exists), point the wrapper at it, run the fork's sync against a
      scratch CouchDB db via the terminator — full `_changes`/`_bulk_docs`
      round-trip through native envelopes.
-   - Deployed: repeat against the manager gateway (192.0.2.33) through an
+   - Deployed: repeat against the manager gateway (gateway.example.test) through an
      SSH local forward to `127.0.0.1:8080` — proves the exact binary the
      vault will talk to. Check gateway log shows envelope opens and the
      security engine sees no plaintext.

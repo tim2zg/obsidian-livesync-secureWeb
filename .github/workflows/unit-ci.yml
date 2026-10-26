@@ -8,8 +8,11 @@ on:
       - main
       - beta
     paths:
+      - 'manifest.json'
+      - 'updates.md'
       - 'src/**'
       - 'test/**'
+      - '_tools/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'
@@ -19,8 +22,15 @@ on:
       - 'eslint.config.mjs'
       - 'eslint.config.common.mjs'
       - 'eslint.community.config.mjs'
+      - 'terser.config.mjs'
       - 'update-workspaces.mjs'
       - 'version-bump.mjs'
+      - 'utils/check-compatibility.js'
+      - 'utils/check-transport-secrets*'
+      - 'utils/livesync-commonlib-version.test.ts'
+      - 'utils/livesync-commonlib-version.ts'
+      - 'utils/*ci*.unit.spec.ts'
+      - 'utils/cli-docker-*.mjs'
       - 'utils/release-*.mjs'
       - 'utils/release-*.unit.spec.ts'
       - 'utils/couchdb/**'
@@ -29,11 +39,19 @@ on:
       - '.github/workflows/prepare-release.yml'
       - '.github/workflows/finalise-release.yml'
       - '.github/workflows/release.yml'
+      - '.github/workflows/cli-deno-tests.yml'
+      - '.github/workflows/cli-p2p-tests.yml'
+      - '.github/workflows/cli-docker-validation.yml'
+      - '.github/workflows/cli-docker.yml'
       - '.github/workflows/unit-ci.yml'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'manifest.json'
+      - 'updates.md'
       - 'src/**'
       - 'test/**'
+      - '_tools/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'
@@ -43,8 +61,15 @@ on:
       - 'eslint.config.mjs'
       - 'eslint.config.common.mjs'
       - 'eslint.community.config.mjs'
+      - 'terser.config.mjs'
       - 'update-workspaces.mjs'
       - 'version-bump.mjs'
+      - 'utils/check-compatibility.js'
+      - 'utils/check-transport-secrets*'
+      - 'utils/livesync-commonlib-version.test.ts'
+      - 'utils/livesync-commonlib-version.ts'
+      - 'utils/*ci*.unit.spec.ts'
+      - 'utils/cli-docker-*.mjs'
       - 'utils/release-*.mjs'
       - 'utils/release-*.unit.spec.ts'
       - 'utils/couchdb/**'
@@ -53,13 +78,32 @@ on:
       - '.github/workflows/prepare-release.yml'
       - '.github/workflows/finalise-release.yml'
       - '.github/workflows/release.yml'
+      - '.github/workflows/cli-deno-tests.yml'
+      - '.github/workflows/cli-p2p-tests.yml'
+      - '.github/workflows/cli-docker-validation.yml'
+      - '.github/workflows/cli-docker.yml'
       - '.github/workflows/unit-ci.yml'
 
 permissions:
   contents: read
 
 jobs:
+  secureweb-transport:
+    name: SecureWeb desktop and tablet transport
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run check:secrets
+      - run: npm run test:secureweb
+
   setup-tools:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Self-hosted setup tools
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -108,6 +152,7 @@ jobs:
         run: npm run test:docker-couchdb:stop || true
 
   unit-test:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -147,6 +192,7 @@ jobs:
           path: coverage/**
 
   integration-test:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Integration Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30

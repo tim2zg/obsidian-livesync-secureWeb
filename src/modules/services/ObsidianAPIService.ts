@@ -5,6 +5,7 @@ import { ObsHttpHandler } from "@/modules/essentialObsidian/APILib/ObsHttpHandle
 import { ObsidianConfirm } from "./ObsidianConfirm";
 import type { Confirm } from "@vrtmrz/livesync-commonlib/compat/interfaces/Confirm";
 import { requestUrl, type RequestUrlParam } from "@/deps";
+import { shouldSealConfiguredUrl, isGatewayInfrastructureRequest } from "@/secureweb/envelope";
 import { compatGlobal } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
 // All Services will be migrated to be based on Plain Services, not Injectable Services.
 // This is a migration step.
@@ -138,8 +139,15 @@ export class ObsidianAPIService extends InjectableAPIService<ObsidianServiceCont
      * In Obsidian, we will use the native `requestUrl` function as the default fetch handler,
      * to address unavoidable CORS issues.
      */
+    override async webCompatFetch(req: string | Request, opts?: RequestInit): Promise<Response> {
+        return this.nativeFetch(req, opts);
+    }
+
     override async nativeFetch(req: string | Request, opts?: RequestInit): Promise<Response> {
         const url = typeof req === "string" ? req : req.url;
+        if (shouldSealConfiguredUrl(url) && !isGatewayInfrastructureRequest(req, opts)) {
+            return compatGlobal.fetch(req, opts);
+        }
         let body: string | ArrayBuffer | undefined = undefined;
         const method =
             typeof opts?.method === "string"

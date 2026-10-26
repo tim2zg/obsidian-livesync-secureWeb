@@ -52,7 +52,7 @@ export class SecureWebRemoteService<T extends ServiceContext> extends Injectable
             deviceId: this.deviceId,
             networkFetch: (input, init) => {
                 const request = input instanceof URL ? input.toString() : input;
-                return super.performFetch(request, init, fetchMethod);
+                return super.performFetch(request, { ...init, signal: opts?.signal ?? (req instanceof Request ? req.signal : undefined) }, fetchMethod);
             },
         });
         const response = await secureFetch(url, {

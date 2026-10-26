@@ -34,6 +34,7 @@ src/apps/cli/testdeno/
   test-p2p-host.ts
   test-p2p-peers-local-relay.ts
   test-p2p-sync.ts
+  test-p2p-automatic-host.ts
   test-p2p-three-nodes-conflict.ts
   test-p2p-upload-download-repro.ts
   test-e2e-two-vaults-matrix.ts
@@ -72,6 +73,7 @@ Main tasks:
 - `deno task test:p2p-host`
 - `deno task test:p2p-peers`
 - `deno task test:p2p-sync`
+- `deno task test:p2p-automatic-host`
 - `deno task test:p2p-three-nodes`
 - `deno task test:p2p-upload-download`
 - `deno task test:e2e-couchdb`
@@ -170,6 +172,11 @@ These flows do not require Bash on the host. The S3 matrix tasks, environment va
 ### `test-p2p-sync.ts`
 
 - Verifies that `p2p-sync` completes after peer discovery.
+
+### `test-p2p-automatic-host.ts`
+
+- Verifies that `p2p-host` restores its configured P2P automation policy and stays connected while multiple clients synchronise through it.
+- Covers automatic baseline transfer, watched updates, client disconnection, and host restart persistence without manual P2P sync commands.
 
 ### `test-p2p-three-nodes-conflict.ts`
 
@@ -323,7 +330,11 @@ deno task test:sync-two-local
 
 ## Continuous Integration
 
-The GitHub Actions workflow `.github/workflows/cli-deno-tests.yml` runs automatically on pushes and pull requests affecting the CLI, executing the non-P2P test suite (`test:ci`). P2P tests (`test:p2p`) are excluded from automatic execution and must be run via manual dispatch (`workflow_dispatch`). You can optionally check the "Enable verbose and debug logging" checkbox during a manual dispatch to produce detailed trace logs for troubleshooting.
+The GitHub Actions workflow `.github/workflows/cli-deno-tests.yml` runs automatically on pushes and pull requests affecting the CLI or its shared runtime inputs. It builds the CLI once, then distributes the bundle to the non-P2P test jobs. The local `test:ci` runner and the automatic matrix both read `ci-tasks.json`. During a manual dispatch, select a test subset and optionally enable 'Enable verbose and debug logging' for detailed troubleshooting traces.
+
+The separate `.github/workflows/cli-p2p-tests.yml` workflow runs the canonical Compose P2P suite automatically for changes to the CLI, its shared runtime inputs, or `test/bench-network/`. A change confined to the Compose fixtures does not start the non-P2P matrix. Host-direct `test:p2p` tasks remain available for explicit diagnostics.
+
+The `.github/workflows/cli-docker-validation.yml` workflow builds one production JavaScript bundle with Node.js 22, then tests Docker images in parallel on native amd64 and arm64 runners. Each image uses the shared bundle and prepares its own runtime dependencies. Validation runs without registry credentials, and both architecture results are collected before publication. The publishing workflow, `.github/workflows/cli-docker.yml`, imports the validated OCI image from each architecture, collects the image digests, and publishes the combined manifest. It retains the existing publication conditions for main, release tags, and manual dispatch. A dry run builds both images and checks the digest pair while skipping registry uploads and manifest publication.
 
 ---
 

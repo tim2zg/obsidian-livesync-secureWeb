@@ -1,3 +1,4 @@
+import { shouldSealConfiguredUrl, sealedRequestUrl } from "@/secureweb/envelope";
 import { normalizePath, Platform, TAbstractFile, type RequestUrlParam, requestUrl } from "@/deps.ts";
 import {
     path2id_base,
@@ -167,7 +168,7 @@ export const _requestToCouchDB = async (
         contentType: "application/json",
         body: body ? JSON.stringify(body) : undefined,
     };
-    return await requestUrl(requestParam);
+    return await (shouldSealConfiguredUrl(uri) ? sealedRequestUrl(requestParam) : requestUrl(requestParam));
 };
 /**
  * @deprecated Use requestToCouchDBWithCredentials instead.

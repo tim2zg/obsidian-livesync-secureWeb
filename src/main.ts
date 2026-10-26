@@ -1,4 +1,5 @@
 import { useP2PSettingsPreparation } from "@/serviceFeatures/useP2PSettingsPreparation";
+import { LOG_LEVEL_URGENT } from "octagonal-wheels/common/logger";
 import { getLanguage, Notice, Plugin, type App, type PluginManifest } from "./deps";
 import { setGetLanguage } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
 setGetLanguage(getLanguage);
@@ -51,6 +52,11 @@ import { useInteractiveConflictResolutionFeature } from "./serviceFeatures/inter
 import { ConflictResolveModal } from "./modules/features/InteractiveConflictResolving/ConflictResolveModal.ts";
 import { useObsidianReplicationRibbonFeature } from "./serviceFeatures/obsidianReplicationRibbon.ts";
 import { useStartupLifecycleFeature } from "./serviceFeatures/startupLifecycle";
+import { useJoinedDevicesFeature } from "./serviceFeatures/useJoinedDevices";
+import { useDatabaseDiagnosticsFeature } from "./serviceFeatures/useDatabaseDiagnostics";
+import { installGlobalSecureWebFetch } from "./secureweb/globalFetch";
+import { installSecureWebXhrShim, installSecureWebRequestUrlShim, setSecureWebSettingsProvider, registerGatewayHost } from "./secureweb/envelope";
+
 export type LiveSyncCore = LiveSyncBaseCore<ObsidianServiceContext, LiveSyncCommands>;
 export default class ObsidianLiveSyncPlugin extends Plugin {
     core: LiveSyncCore;
@@ -112,6 +118,7 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
             fileReflectionProvenance: createFileReflectionProvenance(services.keyValueDB),
         });
         const rebuilder = new ServiceRebuilder({
+            path: services.path,
             events: services.context.events,
             API: services.API,
             database: services.database,
@@ -145,6 +152,11 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
 
     constructor(app: App, manifest: PluginManifest) {
         super(app, manifest);
+        setSecureWebSettingsProvider(() => this.core?.settings);
+        installGlobalSecureWebFetch(() => this);
+        installSecureWebXhrShim(() => this.core?.settings);
+        installSecureWebRequestUrlShim(() => this);
+        this.registerObsidianProtocolHandler("livesync-secureweb", (params) => { void this.handleSecureWebSetup(params); });
         // Maybe no more need to setNoticeClass, but for safety, set it in the constructor of the main plugin class.
         // TODO: remove this.
         setNoticeClass(Notice);
@@ -184,12 +196,18 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
                     core,
                     (_compatibilityReplicator, p2p) => createInteractiveP2PReplication(p2p),
                     createOpenRebuildUI(this.app),
-                    { prepareP2PSettings: useP2PSettingsPreparation(core.services.API.webCompatFetch.bind(core.services.API)) }
+                    {
+                        prepareP2PSettings: useP2PSettingsPreparation(
+                            core.services.API.webCompatFetch.bind(core.services.API)
+                        ),
+                    }
                 );
                 setupManager.registerP2PSetupConnectionProbe(replicator.connectionProbe);
                 useP2PReplicatorCommands(core, replicator);
                 useP2PReplicatorUI(core, core, replicator, createInteractiveP2PReplication(replicator));
                 useObsidianReplicationRibbonFeature(core);
+                useDatabaseDiagnosticsFeature(core);
+                useJoinedDevicesFeature(core, serviceHub.context.noticeGroups);
                 useRemoteConfiguration(core);
 
                 useSetupProtocolFeature(core, setupManager);
@@ -223,7 +241,126 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
     override onload() {
         void this._startUp();
     }
+    private async handleSecureWebSetup(params: Record<string, string>) {
+        const gateway = (params.gateway || "").trim();
+        const db = (params.db || "vault").trim();
+        const token = (params.token || "").trim();
+        if (!gateway || !token) {
+            new Notice("SecureWeb setup link is incomplete (gateway + token required).");
+            return;
+        }
+        let normalizedGateway = gateway;
+        try {
+            const parsed = new URL(gateway);
+            normalizedGateway = `${parsed.protocol}//${parsed.host}`;
+        } catch {
+            new Notice("SecureWeb setup link has an invalid gateway URL.");
+            return;
+        }
+        // Register the host before settings are saved: the wizard's first
+        // connection test runs pre-save and must already ride the sealed
+        // transport (unsealed requests hit the gateway's blind-mode decoy).
+        registerGatewayHost(normalizedGateway);
+        // Settings live on the core, which initialises asynchronously —
+        // wait briefly for it to exist.
+        let settings: any;
+        for (let i = 0; i < 20 && !settings; i += 1) {
+            settings = (this.core as any)?.settings ?? (this as any).settings;
+            if (!settings) {
+                await new Promise((resolve) => window.setTimeout(resolve, 250));
+            }
+        }
+        if (!settings) {
+            new Notice("SecureWeb setup failed: plugin settings are not ready.");
+            return;
+        }
+        // Persist the remote as a PLAINTEXT remote-configuration profile in
+        // livesync's own connection-string format (`sls+https://…/?db=…`).
+        // Writing plaintext top-level couchDB_* fields instead makes the
+        // plugin migrate them into a passphrase-sealed profile that can never
+        // be decrypted ("Failed to initialise the encryption key").
+        let profileUri: string;
+        try {
+            const gw = new URL(normalizedGateway);
+            const conn = new URL(`https://${gw.host}${gw.pathname.replace(/\/$/, "")}/`);
+            conn.username = settings.couchDB_USER || "obsidian";
+            conn.password = token;
+            conn.searchParams.set("db", db || "vault");
+            profileUri = `sls+${conn.toString()}`;
+        } catch {
+            new Notice("SecureWeb setup failed: could not build the connection string.");
+            return;
+        }
+        settings.remoteConfigurations = {
+            secureweb: {
+                id: "secureweb",
+                name: "SecureWeb",
+                uri: profileUri,
+                isEncrypted: false,
+            },
+        };
+        settings.activeConfigurationId = "secureweb";
+        // The replication core reads the flat fields (the PBKDF2 salt
+        // lookup builds its URL from couchDB_URI + DBNAME) and selects the
+        // replicator by remoteType — keep both in sync with the profile.
+        settings.couchDB_URI = normalizedGateway;
+        settings.couchDB_DBNAME = db || "vault";
+        settings.couchDB_USER = settings.couchDB_USER || "obsidian";
+        settings.couchDB_PASSWORD = token;
+        settings.remoteType = "couchdb";
+        settings.configPassphraseStore = "";
+        // Purge legacy encrypted remote-config traps so nothing resurrects
+        // an old connection over these values.
+        settings.encryptedCouchDBConnection = "";
+        settings.encryptedPassphrase = "";
+        settings.encryptedIdDerivationKey = "";
+        // Service identity: relay registry UUID of the sync service. Stored
+        // persistently so the transport never needs deployment-specific
+        // defaults (discovery remains the fallback).
+        const serviceParam = (params.service || "").trim();
+        if (/^[0-9a-fA-F-]{16,64}$/.test(serviceParam)) {
+            (settings).secureWebServiceId = serviceParam;
+        }
+        settings.isConfigured = true;
+        // Document ids in the shared database are canonical: lowercased
+        // (case-insensitive history) + NFC. Align this device with them so
+        // lookups match instead of 404-ing on case/Unicode differences.
+        settings.handleFilenameCaseSensitive = false;
+        // Optional per-device path exclusions (regex). Used to keep huge
+        // scanned PDFs off memory-limited devices — they still live on the
+        // desktop and in the database.
+        if (params.ignore && params.ignore.length <= 1024) {
+            settings.syncIgnoreRegEx = params.ignore;
+        }
+        // Safe-by-default tuning: concurrency defaults to 40 (the upstream
+        // setting default) unless the setup link explicitly overrides it.
+        const conc = Number(params.conc ?? "40");
+        if (Number.isFinite(conc) && conc > 0 && conc <= 40) {
+            settings.concurrencyOfReadChunksOnline = conc;
+        }
+        const batch = Number(params.batch);
+        if (Number.isFinite(batch) && batch > 0 && batch <= 50) {
+            settings.batch_size = batch;
+        }
+        if (params.timeouts === "1") {
+            settings.useTimeouts = true;
+        }
+        try {
+            await this.saveSettings();
+            new Notice(`SecureWeb configured: ${normalizedGateway} → ${settings.couchDB_DBNAME}`);
+        } catch (err) {
+            new Notice(
+                `SecureWeb setup save failed: ${err instanceof Error ? err.message : String(err)}`
+            );
+        }
+    }
     override onunload(): void {
-        return void this.core.services.control.onUnload();
+        void this.core.services.control.onUnload().catch((error) => {
+            this.core.services.API.addLog(
+                "Failed to unload Self-hosted LiveSync: " + String(error),
+                LOG_LEVEL_URGENT,
+                "shutdown"
+            );
+        });
     }
 }

@@ -1,3 +1,4 @@
+import { shouldSealConfiguredUrl, sealedRequestUrl } from "@/secureweb/envelope";
 // This file was originally based on code published by @remotely-save under the Apache License 2.0.
 // I would like to express my gratitude to the original authors for their work.
 //
@@ -106,7 +107,7 @@ export class ObsHttpHandler extends FetchHttpHandler {
         };
 
         const raceOfPromises = [
-            requestUrl(param).then((rsp) => {
+            (shouldSealConfiguredUrl(url) ? sealedRequestUrl(param) : requestUrl(param)).then((rsp) => {
                 const headers = rsp.headers;
                 const headersLower: Record<string, string> = {};
                 for (const key of Object.keys(headers)) {

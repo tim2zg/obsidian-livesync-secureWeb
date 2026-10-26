@@ -12,8 +12,14 @@ import { concatBytes } from '@noble/hashes/utils.js';
 import { encapsulate, decapsulate } from './xwing';
 import type { HybridSealed } from './codec';
 
-export const GATEWAY_REQUEST_INFO = new TextEncoder().encode('secureweb/gateway-e2e/v1:request');
-export const GATEWAY_RESPONSE_INFO = new TextEncoder().encode('secureweb/gateway-e2e/v1:response');
+// True-E2E v2 domain separators (the legacy v1 `gateway-e2e/v1:*` infos
+// were removed with the v1 plane):
+//   outer RouteEnvelope  -> secureweb/gateway-e2e/v2:request
+//   inner ServiceRequest -> secureweb/service-e2e/v1:request
+//   ServiceResponse      -> secureweb/service-e2e/v1:response
+export const ROUTE_REQUEST_INFO = new TextEncoder().encode('secureweb/gateway-e2e/v2:request');
+export const SERVICE_REQUEST_INFO = new TextEncoder().encode('secureweb/service-e2e/v1:request');
+export const SERVICE_RESPONSE_INFO = new TextEncoder().encode('secureweb/service-e2e/v1:response');
 
 // HPKE Suite ID: "HPKE" (4B) || KEM (2B, 0x647a for X-Wing Draft-06) || KDF (2B, 0x0001) || AEAD (2B, 0x0003)
 const HPKE_SUITE_ID = new Uint8Array([
@@ -96,7 +102,7 @@ export function keyScheduleBase(
  */
 export function seal(
     recipientPk: Uint8Array,
-    info: Uint8Array = GATEWAY_REQUEST_INFO,
+    info: Uint8Array = ROUTE_REQUEST_INFO,
     aad: Uint8Array = new Uint8Array(0),
     plaintext: Uint8Array = new Uint8Array(0)
 ): HybridSealed {
@@ -123,14 +129,14 @@ export function seal(
  * @param kemOutput - 1120 bytes KEM output
  * @param ciphertext - Ciphertext including 16-byte Poly1305 tag
  * @param secretKey - X-Wing recipient secret key (32B seed)
- * @param info - Context info string (e.g. GATEWAY_RESPONSE_INFO)
+ * @param info - Context info string (e.g. SERVICE_RESPONSE_INFO)
  * @param aad - Additional authenticated data (default empty)
  */
 export function open(
     kemOutput: Uint8Array,
     ciphertext: Uint8Array,
     secretKey: Uint8Array,
-    info: Uint8Array = GATEWAY_RESPONSE_INFO,
+    info: Uint8Array = SERVICE_RESPONSE_INFO,
     aad: Uint8Array = new Uint8Array(0)
 ): Uint8Array {
     if (kemOutput.length === 0) {

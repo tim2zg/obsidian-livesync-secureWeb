@@ -2,36 +2,16 @@
  * SecureWeb — Bincode 1.3 Mini-Codec and Padding Utilities
  *
  * Implements byte-for-byte serialization compatibility with Rust `bincode 1.3`
- * for `HybridSealed`, `GatewayEnvelope`, and `GatewayHttpResponse`.
+ * for `HybridSealed` and the true-E2E v2 service envelope structs.
  */
 
 export const PAD_BUCKETS = [1024, 4096, 16384] as const;
 export const PAD_OVERHEAD = 8;
-export const GATEWAY_ENVELOPE_VERSION = 1;
 
 export interface HybridSealed {
     suite: number; // 0 = XWingDraft06
     kemOutput: Uint8Array;
     ciphertext: Uint8Array;
-}
-
-export interface GatewayEnvelope {
-    version: number;
-    senderDeviceId: string;
-    targetHost: string;
-    method: string;
-    pathAndQuery: string;
-    headers: [string, string][];
-    body: Uint8Array;
-    nonce: Uint8Array; // 12 bytes
-    padLen: number; // u16
-}
-
-export interface GatewayHttpResponse {
-    status: number; // u16
-    headers: [string, string][];
-    body: Uint8Array;
-    padLen: number; // u16
 }
 
 /**
@@ -46,42 +26,6 @@ export function padBucketFor(rawLen: number): number {
     }
     const maxBucket = PAD_BUCKETS[PAD_BUCKETS.length - 1];
     return Math.ceil(minNeeded / maxBucket) * maxBucket;
-}
-
-/**
- * Calculate the number of zero bytes to pad to reach the bucket boundary.
- */
-export function calculatePadLen(rawLen: number): number {
-    const bucket = padBucketFor(rawLen);
-    return bucket - PAD_OVERHEAD - rawLen;
-}
-
-/**
- * Append padLen zero bytes to body.
- */
-export function padBody(body: Uint8Array, padLen: number): Uint8Array {
-    if (padLen <= 0) {
-        return body;
-    }
-    const out = new Uint8Array(body.length + padLen);
-    out.set(body, 0);
-    return out;
-}
-
-/**
- * Strip padLen trailing bytes if they are all zero.
- */
-export function unpadBody(body: Uint8Array, padLen: number): Uint8Array {
-    if (padLen <= 0 || padLen >= body.length) {
-        return body;
-    }
-    const cutoff = body.length - padLen;
-    for (let i = cutoff; i < body.length; i++) {
-        if (body[i] !== 0) {
-            return body; // Non-zero detected; return unstripped
-        }
-    }
-    return body.subarray(0, cutoff);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,104 +198,166 @@ export function deserializeHybridSealed(bytes: Uint8Array): HybridSealed {
     return { suite, kemOutput, ciphertext };
 }
 
-export function serializeGatewayEnvelope(env: GatewayEnvelope): Uint8Array {
-    const writer = new BincodeWriter();
-    writer.writeU8(env.version);
-    writer.writeString(env.senderDeviceId);
-    writer.writeString(env.targetHost);
-    writer.writeString(env.method);
-    writer.writeString(env.pathAndQuery);
+// ---------------------------------------------------------------------------
+// True-E2E v2 (opaque router): RouteEnvelope + ServiceRequest/ServiceResponse
+// Byte-for-byte compatibility with Rust `bincode 1.3` structs in `common`.
+// Padded at the SEAL layer with the SWP1 bucket frame (`pad_to_bucket`),
+// so these structs carry no padLen fields.
+// ---------------------------------------------------------------------------
 
-    // headers: Vec<(String, String)>
-    writer.writeU64(env.headers.length);
-    for (const [k, v] of env.headers) {
-        writer.writeString(k);
-        writer.writeString(v);
-    }
+export const ROUTE_ENVELOPE_VERSION = 2;
+export const SERVICE_ENVELOPE_VERSION = 1;
 
-    // body: Vec<u8> (already padded if padLen > 0)
-    writer.writeVector(env.body);
+const SWP1_MAGIC = [0x53, 0x57, 0x50, 0x31] as const; // "SWP1"
 
-    // nonce: [u8; 12]
-    if (env.nonce.length !== 12) {
-        throw new Error(`GatewayEnvelope nonce must be 12 bytes, got ${env.nonce.length}`);
-    }
-    writer.writeBytes(env.nonce);
-
-    // pad_len: u16
-    writer.writeU16(env.padLen);
-
-    return writer.getBytes();
+export interface ServiceRequestEnvelope {
+    version: number;
+    method: string;
+    pathAndQuery: string;
+    headers: [string, string][];
+    body: Uint8Array;
+    auth: string | null;
 }
 
-export function deserializeGatewayEnvelope(bytes: Uint8Array): GatewayEnvelope {
-    const reader = new BincodeReader(bytes);
-    const version = reader.readU8();
-    const senderDeviceId = reader.readString();
-    const targetHost = reader.readString();
-    const method = reader.readString();
-    const pathAndQuery = reader.readString();
+export interface RouteEnvelopeV2 {
+    version: number;
+    targetService: string;
+    senderDeviceId: string;
+    sealedRequest: Uint8Array;
+    replyPubkey: Uint8Array; // 1216 bytes
+    nonce: Uint8Array; // 12 bytes
+    sentAtUnix: number | bigint;
+    ttlSeconds: number;
+}
 
-    const headersLen = Number(reader.readU64());
+export interface ServiceResponseEnvelope {
+    version: number;
+    status: number;
+    headers: [string, string][];
+    body: Uint8Array;
+}
+
+/**
+ * Frame a serialized plaintext into its SWP1 padding bucket:
+ * [SWP1 magic (4)] [orig_len: u32 LE] [payload] [zero pad to bucket].
+ * Mirrors Rust `common::pad_to_bucket`.
+ */
+export function padToBucketFrame(payload: Uint8Array): Uint8Array {
+    const bucket = padBucketFor(payload.length);
+    const out = new Uint8Array(bucket);
+    out.set(SWP1_MAGIC, 0);
+    new DataView(out.buffer).setUint32(4, payload.length, true);
+    out.set(payload, PAD_OVERHEAD);
+    return out;
+}
+
+/**
+ * Recover the payload from an SWP1 frame. Throws on missing magic or an
+ * inconsistent length (corruption / hostile input).
+ */
+export function unpadFrame(frame: Uint8Array): Uint8Array {
+    if (frame.length < PAD_OVERHEAD) {
+        throw new Error('unpadFrame: frame shorter than SWP1 overhead');
+    }
+    for (let i = 0; i < 4; i++) {
+        if (frame[i] !== SWP1_MAGIC[i]) {
+            throw new Error('unpadFrame: missing SWP1 magic');
+        }
+    }
+    const len = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(4, true);
+    if (len > frame.length - PAD_OVERHEAD) {
+        throw new Error('unpadFrame: inconsistent payload length');
+    }
+    return frame.subarray(PAD_OVERHEAD, PAD_OVERHEAD + len);
+}
+
+export function serializeServiceRequest(req: ServiceRequestEnvelope): Uint8Array {
+    const w = new BincodeWriter();
+    w.writeU8(req.version);
+    w.writeString(req.method);
+    w.writeString(req.pathAndQuery);
+    w.writeU64(req.headers.length);
+    for (const [k, v] of req.headers) {
+        w.writeString(k);
+        w.writeString(v);
+    }
+    w.writeVector(req.body);
+    if (req.auth === null || req.auth === undefined) {
+        w.writeU8(0);
+    } else {
+        w.writeU8(1);
+        w.writeString(req.auth);
+    }
+    return w.getBytes();
+}
+
+export function deserializeServiceRequest(bytes: Uint8Array): ServiceRequestEnvelope {
+    const r = new BincodeReader(bytes);
+    const version = r.readU8();
+    const method = r.readString();
+    const pathAndQuery = r.readString();
+    const headersLen = Number(r.readU64());
     const headers: [string, string][] = [];
     for (let i = 0; i < headersLen; i++) {
-        const k = reader.readString();
-        const v = reader.readString();
-        headers.push([k, v]);
+        headers.push([r.readString(), r.readString()]);
     }
-
-    const body = reader.readVector();
-    const nonce = reader.readBytes(12);
-    const padLen = reader.readU16();
-
-    return {
-        version,
-        senderDeviceId,
-        targetHost,
-        method,
-        pathAndQuery,
-        headers,
-        body,
-        nonce,
-        padLen,
-    };
+    const body = r.readVector();
+    const authTag = r.readU8();
+    const auth = authTag === 0 ? null : r.readString();
+    return { version, method, pathAndQuery, headers, body, auth };
 }
 
-export function serializeGatewayHttpResponse(resp: GatewayHttpResponse): Uint8Array {
-    const writer = new BincodeWriter();
-    writer.writeU16(resp.status);
+export function serializeRouteEnvelope(route: RouteEnvelopeV2): Uint8Array {
+    const w = new BincodeWriter();
+    w.writeU8(route.version);
+    w.writeString(route.targetService);
+    w.writeString(route.senderDeviceId);
+    w.writeVector(route.sealedRequest);
+    w.writeVector(route.replyPubkey);
+    if (route.nonce.length !== 12) {
+        throw new Error(`RouteEnvelope nonce must be 12 bytes, got ${route.nonce.length}`);
+    }
+    w.writeBytes(route.nonce);
+    w.writeU64(route.sentAtUnix);
+    w.writeU32(route.ttlSeconds);
+    return w.getBytes();
+}
 
-    writer.writeU64(resp.headers.length);
+export function deserializeRouteEnvelope(bytes: Uint8Array): RouteEnvelopeV2 {
+    const r = new BincodeReader(bytes);
+    const version = r.readU8();
+    const targetService = r.readString();
+    const senderDeviceId = r.readString();
+    const sealedRequest = r.readVector();
+    const replyPubkey = r.readVector();
+    const nonce = r.readBytes(12);
+    const sentAtUnix = Number(r.readU64());
+    const ttlSeconds = r.readU32();
+    return { version, targetService, senderDeviceId, sealedRequest, replyPubkey, nonce, sentAtUnix, ttlSeconds };
+}
+
+export function serializeServiceResponse(resp: ServiceResponseEnvelope): Uint8Array {
+    const w = new BincodeWriter();
+    w.writeU8(resp.version);
+    w.writeU16(resp.status);
+    w.writeU64(resp.headers.length);
     for (const [k, v] of resp.headers) {
-        writer.writeString(k);
-        writer.writeString(v);
+        w.writeString(k);
+        w.writeString(v);
     }
-
-    writer.writeVector(resp.body);
-    writer.writeU16(resp.padLen);
-
-    return writer.getBytes();
+    w.writeVector(resp.body);
+    return w.getBytes();
 }
 
-export function deserializeGatewayHttpResponse(bytes: Uint8Array): GatewayHttpResponse {
-    const reader = new BincodeReader(bytes);
-    const status = reader.readU16();
-
-    const headersLen = Number(reader.readU64());
+export function deserializeServiceResponse(bytes: Uint8Array): ServiceResponseEnvelope {
+    const r = new BincodeReader(bytes);
+    const version = r.readU8();
+    const status = r.readU16();
+    const headersLen = Number(r.readU64());
     const headers: [string, string][] = [];
     for (let i = 0; i < headersLen; i++) {
-        const k = reader.readString();
-        const v = reader.readString();
-        headers.push([k, v]);
+        headers.push([r.readString(), r.readString()]);
     }
-
-    const body = reader.readVector();
-    const padLen = reader.readU16();
-
-    return {
-        status,
-        headers,
-        body,
-        padLen,
-    };
+    const body = r.readVector();
+    return { version, status, headers, body };
 }

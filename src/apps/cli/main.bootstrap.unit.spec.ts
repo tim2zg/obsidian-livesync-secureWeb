@@ -1,17 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as chokidar from "chokidar";
+import * as offlineScanner from "@vrtmrz/livesync-commonlib/compat/serviceFeatures/offlineScanner";
 import { ControlService } from "@vrtmrz/livesync-commonlib/compat/services/base/ControlService";
-import type { FilePathWithPrefix } from "@vrtmrz/livesync-commonlib/compat/common/types";
+import {
+    AutoAccepting,
+    REMOTE_COUCHDB,
+    REMOTE_P2P,
+    type FilePathWithPrefix,
+    type ObsidianLiveSyncSettings,
+} from "@vrtmrz/livesync-commonlib/compat/common/types";
 import { ServiceFileHandler } from "@/serviceModules/FileHandler";
 import { ServiceFileAccessCLI } from "./serviceModules/ServiceFileAccessImpl";
 import { runCommand } from "./commands/runCommand";
 import { createDefaultCliSettings } from "./cliSettingsDefaults";
 import { main, type CliCommandRunner } from "./main";
+import { cloneSettings } from "./settingsPersistence";
+import type { CLICommand } from "./commands/types";
 
 vi.mock("chokidar", { spy: true });
+vi.mock("@vrtmrz/livesync-commonlib/compat/serviceFeatures/offlineScanner", { spy: true });
 
 function createStandardIoMock() {
     return {
@@ -33,6 +43,7 @@ describe("CLI database preparation", () => {
 
     beforeEach(async () => {
         vi.mocked(chokidar.watch).mockClear();
+        vi.mocked(offlineScanner.useOfflineScanner).mockClear();
         directory = await mkdtemp(join(tmpdir(), "livesync-cli-bootstrap-"));
         vaultPath = join(directory, "vault");
         settingsPath = join(directory, "settings.json");
@@ -61,11 +72,137 @@ describe("CLI database preparation", () => {
         await rm(directory, { recursive: true, force: true });
     });
 
-    async function start(command: "daemon" | "mirror" | "ls", runner: CliCommandRunner, exitCode = 1) {
-        process.argv = ["node", "livesync-cli", directory, "--vault", vaultPath, "--settings", settingsPath, command];
+    async function start(command: CLICommand, runner: CliCommandRunner, exitCode = 1, force = false) {
+        process.argv = [
+            "node",
+            "livesync-cli",
+            directory,
+            ...(force ? ["--force"] : []),
+            "--vault",
+            vaultPath,
+            "--settings",
+            settingsPath,
+            command,
+        ];
         // Daemon probes return false so the real core unloads without keeping a daemon alive.
         await expect(main(standardIo, runner)).rejects.toThrow(`__EXIT__:${exitCode}`);
     }
+
+    it("loads legacy device values and persists configuration through the service-owned store", async () => {
+        const localStoragePath = join(directory, ".livesync", "runtime", "local-storage.json");
+        await mkdir(join(directory, ".livesync", "runtime"), { recursive: true });
+        await writeFile(localStoragePath, JSON.stringify({ ["__proto__"]: "legacy value" }));
+        let legacyValue: string | null | undefined;
+        const runner = vi.fn<CliCommandRunner>(async (_options, { core }) => {
+            legacyValue = await core.services.setting.deviceValues.getValue("__proto__");
+            expect(core.services.config).toBe(core.services.setting.config);
+            await core.services.config.setValue("bootstrap-probe", "config value");
+            return false;
+        });
+
+        await start("ls", runner);
+
+        expect(legacyValue).toBe("legacy value");
+        const stored = JSON.parse(await readFile(localStoragePath, "utf-8")) as Record<string, string>;
+        expect(Object.prototype.hasOwnProperty.call(stored, "__proto__")).toBe(true);
+        expect(stored["__proto__"]).toBe("legacy value");
+        expect(Object.values(stored)).toContain("config value");
+    });
+
+    it.each([REMOTE_P2P, REMOTE_COUCHDB])(
+        "restores configured P2P automation before the host connects (%s)",
+        async (remoteType) => {
+            const p2pSettings = {
+                P2P_Enabled: true,
+                P2P_AutoAccepting: AutoAccepting.ALL,
+                P2P_AutoStart: true,
+                P2P_AutoBroadcast: true,
+                P2P_AutoSyncPeers: "Desktop,android",
+                P2P_AutoWatchPeers: "Desktop,android",
+            };
+            await writeFile(
+                settingsPath,
+                JSON.stringify({
+                    ...createDefaultCliSettings(),
+                    isConfigured: true,
+                    remoteType,
+                    liveSync: true,
+                    periodicReplication: true,
+                    syncOnSave: true,
+                    ...p2pSettings,
+                })
+            );
+            const savedSettings = await readFile(settingsPath, "utf-8");
+            let settingsBeforeHost: ObsidianLiveSyncSettings | undefined;
+            let settingsAtConnect: ObsidianLiveSyncSettings | undefined;
+            const connect = vi.fn();
+            const runner = vi.fn<CliCommandRunner>(async (options, context) => {
+                settingsBeforeHost = cloneSettings(context.core.services.setting.currentSettings());
+                connect.mockImplementation(async () => {
+                    settingsAtConnect = cloneSettings(context.core.services.setting.currentSettings());
+                    throw new Error("Host connection probe complete");
+                });
+                return runCommand(options, {
+                    ...context,
+                    p2pReplicator: {
+                        ...context.p2pReplicator!,
+                        transportLifecycle: { isConnected: false, connect, disconnect: vi.fn() },
+                    },
+                });
+            });
+
+            await start("p2p-host", runner);
+
+            expect(settingsBeforeHost).toMatchObject({
+                P2P_AutoBroadcast: false,
+                P2P_AutoSyncPeers: "",
+                P2P_AutoWatchPeers: "",
+            });
+            expect(connect).toHaveBeenCalledOnce();
+            expect(settingsAtConnect).toMatchObject(p2pSettings);
+            expect(settingsAtConnect).toMatchObject({ liveSync: false, periodicReplication: false, syncOnSave: false });
+            expect(await readFile(settingsPath, "utf-8")).toBe(savedSettings);
+        }
+    );
+
+    it.each(["ls", "put", "remote-set", "p2p-peers", "p2p-sync"] as const)(
+        "keeps automatic P2P work suspended for %s",
+        async (command) => {
+            await writeFile(
+                settingsPath,
+                JSON.stringify({
+                    ...createDefaultCliSettings(),
+                    isConfigured: true,
+                    remoteType: REMOTE_P2P,
+                    P2P_Enabled: true,
+                    P2P_AutoAccepting: AutoAccepting.ALL,
+                    P2P_AutoStart: true,
+                    P2P_AutoBroadcast: true,
+                    P2P_AutoSyncPeers: "Desktop",
+                    P2P_AutoWatchPeers: "Desktop",
+                })
+            );
+            const savedSettings = await readFile(settingsPath, "utf-8");
+            let settingsAtCommand: ObsidianLiveSyncSettings | undefined;
+            const runner = vi.fn<CliCommandRunner>(async (_options, { core }) => {
+                settingsAtCommand = cloneSettings(core.services.setting.currentSettings());
+                return false;
+            });
+
+            await start(command, runner);
+
+            expect(runner).toHaveBeenCalledOnce();
+            expect(settingsAtCommand).toMatchObject({
+                P2P_Enabled: true,
+                P2P_AutoAccepting: AutoAccepting.NONE,
+                P2P_AutoStart: false,
+                P2P_AutoBroadcast: false,
+                P2P_AutoSyncPeers: "",
+                P2P_AutoWatchPeers: "",
+            });
+            expect(await readFile(settingsPath, "utf-8")).toBe(savedSettings);
+        }
+    );
 
     it.each([
         { command: "daemon" as const, suspendFileWatching: false },
@@ -101,6 +238,45 @@ describe("CLI database preparation", () => {
         }
     );
 
+    it("retains filesystem creation time in database Metadata after an in-place edit", async (context) => {
+        const note = join(vaultPath, "notes/local.md");
+        const initial = await stat(note);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await appendFile(note, "\nedit");
+        const edited = await stat(note);
+        if (
+            initial.birthtimeMs <= 0 ||
+            edited.birthtimeMs !== initial.birthtimeMs ||
+            Math.floor(edited.ctimeMs) <= Math.floor(initial.birthtimeMs)
+        ) {
+            context.skip();
+        }
+
+        const observed: { before?: number; after?: number; content?: string; stored?: boolean } = {};
+        const runner = vi.fn<CliCommandRunner>(async (_options, { core }) => {
+            const filePath = "notes/local.md" as FilePathWithPrefix;
+            const before = await core.serviceModules.databaseFileAccess.fetch(filePath);
+            if (before) observed.before = before.stat.ctime;
+            await appendFile(note, "\nsecond edit");
+            observed.stored = await core.serviceModules.fileHandler.storeFileToDB(filePath, true);
+            const after = await core.serviceModules.databaseFileAccess.fetch(filePath);
+            if (after) {
+                observed.after = after.stat.ctime;
+                observed.content = await after.body.text();
+            }
+            return false;
+        });
+
+        await start("daemon", runner);
+        expect(runner).toHaveBeenCalledOnce();
+        expect(observed).toEqual({
+            before: Math.floor(initial.birthtimeMs),
+            after: Math.floor(initial.birthtimeMs),
+            content: "local content\nedit\nsecond edit",
+            stored: true,
+        });
+    });
+
     it("runs the mirror scan once and exits without starting file watching", async () => {
         const enumerate = vi.spyOn(ServiceFileAccessCLI.prototype, "getFiles");
         const watch = vi.mocked(chokidar.watch);
@@ -111,6 +287,49 @@ describe("CLI database preparation", () => {
         expect(runner).toHaveBeenCalledOnce();
         expect(enumerate).toHaveBeenCalledOnce();
         expect(watch).not.toHaveBeenCalled();
+    });
+
+    it.each(["rebuild", "fetch"] as const)("does not scan or mirror legacy Vault files before %s", async (command) => {
+        const storedPaths: string[] = [];
+        const runner = vi.fn<CliCommandRunner>(async (_options, { core }) => {
+            for await (const doc of core.services.database.localDatabase.findAllNormalDocs()) {
+                storedPaths.push(doc.path);
+            }
+            return false;
+        });
+
+        await start(command, runner, 1, true);
+
+        expect(runner).toHaveBeenCalledOnce();
+        expect(storedPaths).toEqual([]);
+        expect(await readFile(join(vaultPath, "notes/local.md"), "utf-8")).toBe("local content");
+        expect(vi.mocked(chokidar.watch)).not.toHaveBeenCalled();
+    });
+
+    it("registers the Rebuild scanner after readiness and makes its Vault scan available", async () => {
+        const enumerate = vi.spyOn(ServiceFileAccessCLI.prototype, "getFiles");
+        const useScanner = vi.mocked(offlineScanner.useOfflineScanner);
+
+        let scansBeforeCommand = -1;
+        let scannerRegistrationsBeforeCommand = -1;
+        let storedPaths: string[] = [];
+        const runner = vi.fn<CliCommandRunner>(async (_options, { core }) => {
+            scansBeforeCommand = enumerate.mock.calls.length;
+            scannerRegistrationsBeforeCommand = useScanner.mock.calls.length;
+            await core.services.vault.scanVault(true, true);
+            for await (const doc of core.services.database.localDatabase.findAllNormalDocs()) {
+                storedPaths.push(doc.path);
+            }
+            return false;
+        });
+
+        await start("rebuild", runner, 1, true);
+
+        expect(useScanner).toHaveBeenCalledOnce();
+        expect(scannerRegistrationsBeforeCommand).toBe(1);
+        expect(scansBeforeCommand).toBe(0);
+        expect(enumerate).toHaveBeenCalledOnce();
+        expect(storedPaths).toEqual(["notes/local.md"]);
     });
 
     it.each([
@@ -146,20 +365,25 @@ describe("CLI database preparation", () => {
         expect(storedPaths).toEqual([]);
     });
 
-    it("unloads without starting the command when database preparation fails", async () => {
-        vi.spyOn(ControlService.prototype, "onReady").mockResolvedValue(false);
-        const unload = vi.spyOn(ControlService.prototype, "onUnload");
-        const runner = vi.fn<CliCommandRunner>(async () => false);
-        const settingsBefore = await readFile(settingsPath, "utf-8");
+    it.each(["daemon", "p2p-host"] as const)(
+        "unloads without starting %s when database preparation fails",
+        async (command) => {
+            vi.spyOn(ControlService.prototype, "onReady").mockResolvedValue(false);
+            const unload = vi.spyOn(ControlService.prototype, "onUnload");
+            const runner = vi.fn<CliCommandRunner>(async () => false);
+            const settingsBefore = await readFile(settingsPath, "utf-8");
 
-        await start("daemon", runner);
+            await start(command, runner);
 
-        expect(runner).not.toHaveBeenCalled();
-        expect(unload).toHaveBeenCalledOnce();
-        expect(unload.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(process.exit).mock.invocationCallOrder[0]);
-        expect(process.exit).toHaveBeenCalledWith(1);
-        expect(await readFile(settingsPath, "utf-8")).toBe(settingsBefore);
-    });
+            expect(runner).not.toHaveBeenCalled();
+            expect(unload).toHaveBeenCalledOnce();
+            expect(unload.mock.invocationCallOrder[0]).toBeLessThan(
+                vi.mocked(process.exit).mock.invocationCallOrder[0]
+            );
+            expect(process.exit).toHaveBeenCalledWith(1);
+            expect(await readFile(settingsPath, "utf-8")).toBe(settingsBefore);
+        }
+    );
 
     it("stops the daemon when the startup scanner refuses a suspended Vault scan", async () => {
         await writeFile(

@@ -4,11 +4,12 @@ import { InjectableRemoteService } from "@vrtmrz/livesync-commonlib/compat/servi
 import { reactiveSource } from "octagonal-wheels/dataobject/reactive";
 import { ObsidianRemoteService } from "@/modules/services/ObsidianServices";
 import {
-    calculatePadLen, deserializeGatewayEnvelope, deserializeHybridSealed, padBody,
-    serializeGatewayHttpResponse, serializeHybridSealed, unpadBody, type GatewayEnvelope,
+    deserializeRouteEnvelope, deserializeHybridSealed, deserializeServiceRequest,
+    padToBucketFrame, serializeServiceResponse, serializeHybridSealed, unpadFrame,
+    SERVICE_ENVELOPE_VERSION, type ServiceRequestEnvelope,
 } from "@/secureweb/codec";
-import { clearPubkeyCache, decodeKeyBytes, encodeBase64, SecureWebEnvelopeError } from "@/secureweb/envelope";
-import { open, seal, GATEWAY_REQUEST_INFO, GATEWAY_RESPONSE_INFO } from "@/secureweb/hpke";
+import { clearPubkeyCache, encodeBase64, SecureWebEnvelopeError } from "@/secureweb/envelope";
+import { open, seal, ROUTE_REQUEST_INFO, SERVICE_REQUEST_INFO, SERVICE_RESPONSE_INFO } from "@/secureweb/hpke";
 import { generateKeypair } from "@/secureweb/xwing";
 
 function fixture(networkFetch: typeof fetch) {
@@ -29,24 +30,26 @@ function fixture(networkFetch: typeof fetch) {
 
 function gateway() {
     const keys = generateKeypair();
-    const opened: GatewayEnvelope[] = [];
+    const serviceKeys = generateKeypair();
+    const opened: (ServiceRequestEnvelope & { senderDeviceId: string })[] = [];
     const networkFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        expect(new Headers(init?.headers).has("authorization")).toBe(false);
         if (url.endsWith("/.well-known/gateway-pubkey")) {
-            expect(new Headers(init?.headers).has("authorization")).toBe(false);
-            return Response.json({ pubkey: encodeBase64(keys.publicKey), hosts: ["couchdb.local"], revoked: [] });
+            return Response.json({ pubkey: encodeBase64(keys.publicKey), hosts: ["couchdb.local"], revoked: [], services: {
+                "couchdb.local": { pubkey_base64: encodeBase64(serviceKeys.publicKey), service_id: "fixture-service" },
+            } });
         }
         expect(url).toMatch(/^https:\/\/[^/]+\/gateway\/e2e-envelope$/);
         expect(init?.method).toBe("POST");
-        expect(new Headers(init?.headers).has("authorization")).toBe(false);
         const wire = deserializeHybridSealed(new Uint8Array(init?.body as ArrayBuffer));
-        const envelope = deserializeGatewayEnvelope(open(wire.kemOutput, wire.ciphertext, keys.secretKey, GATEWAY_REQUEST_INFO));
-        opened.push(envelope);
-        const replyKey = decodeKeyBytes(envelope.headers.find(([key]) => key === "x-reply-pubkey")![1]);
-        const body = new TextEncoder().encode('{"ok":true}');
-        const padLen = calculatePadLen(body.length);
-        const response = serializeGatewayHttpResponse({ status: 201, headers: [["content-type", "application/json"]], body: padBody(body, padLen), padLen });
-        const sealed = serializeHybridSealed(seal(replyKey, GATEWAY_RESPONSE_INFO, new Uint8Array(0), response));
+        const route = deserializeRouteEnvelope(unpadFrame(open(wire.kemOutput, wire.ciphertext, keys.secretKey, ROUTE_REQUEST_INFO)));
+        const inner = deserializeHybridSealed(route.sealedRequest);
+        const request = deserializeServiceRequest(unpadFrame(open(inner.kemOutput, inner.ciphertext, serviceKeys.secretKey, SERVICE_REQUEST_INFO)));
+        opened.push({ ...request, senderDeviceId: route.senderDeviceId });
+        const response = padToBucketFrame(serializeServiceResponse({ version: SERVICE_ENVELOPE_VERSION, status: 201,
+            headers: [["content-type", "application/json"]], body: new TextEncoder().encode('{"ok":true}') }));
+        const sealed = serializeHybridSealed(seal(route.replyPubkey, SERVICE_RESPONSE_INFO, new Uint8Array(0), response));
         return new Response(sealed as unknown as BodyInit, { headers: { "content-type": "application/octet-stream" } });
     });
     return { opened, networkFetch };
@@ -72,7 +75,7 @@ describe("SecureWeb CouchDB HTTP service composition", () => {
         expect(envelope.method).toBe("POST");
         expect(envelope.senderDeviceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
         expect(new Headers(envelope.headers).get("authorization")).toBe("Bearer profile:token");
-        expect(new TextDecoder().decode(unpadBody(envelope.body, envelope.padLen))).toBe('{"docs":[]}');
+        expect(new TextDecoder().decode(envelope.body)).toBe('{"docs":[]}');
         expect(remote.networkFetch.mock.calls.every(([, init]) => init?.signal === controller.signal)).toBe(true);
         expect(adapter === 1 ? webCompatFetch : nativeFetch).not.toHaveBeenCalled();
         expect(adapter === 1 ? nativeFetch : webCompatFetch).toHaveBeenCalledTimes(2);
@@ -100,7 +103,7 @@ describe("SecureWeb CouchDB HTTP service composition", () => {
 
     it.each([
         "https://plain.test/vault/_changes", "https://plain.test:8080/vault",
-        "https://example.trycloudflare.com/vault", "https://plain.test/gateway/e2e-envelope-other/vault",
+        "https://tunnel.example.test/vault", "https://plain.test/gateway/e2e-envelope-other/vault",
         "https://plain.test/vault?next=/gateway/e2e-envelope",
     ])("retains upstream fetching for %s", async (url) => {
         const networkFetch = vi.fn(async () => Response.json({ plain: true }));

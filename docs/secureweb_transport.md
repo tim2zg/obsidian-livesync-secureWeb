@@ -1,83 +1,50 @@
 # SecureWeb transport for Self-hosted LiveSync
 
-Last updated: 2026-10-05
+The SecureWeb fork uses the two-layer V2 envelope protocol. The request is
+sealed to the selected service, then wrapped in a routing envelope for the
+gateway. Replies are sealed to a fresh client reply key. A V2-capable gateway
+is required. V1 gateway-terminating envelopes are no longer supported.
 
-The SecureWeb transport seals CouchDB requests in post-quantum X-Wing
-(`X25519` + `ML-KEM-768`) envelopes before sending them through the gateway.
-The gateway's CouchDB terminator opens the envelope and sends the request to
-the configured backend. Encrypted replies use a fresh client reply key.
-LiveSync's application-level encryption remains a separate setting.
+## Configure a gateway
 
-## Install the SecureWeb build
+Use the SecureWeb setup link supplied by your operator. It configures the
+gateway, database, device App Token, and service identifier together. The
+operator can use a stable custom domain; no deployment hostname or credential
+is embedded in the plug-in bundle.
 
-The fork release `1.0.35-secureweb.1` is based on upstream 1.0.35. Download
-`main.js`, `manifest.json`, and `styles.css` from the fork's GitHub Release,
-and place all three in your Vault's `.obsidian/plugins/obsidian-livesync`
-directory. Reload Obsidian, then enable Self-hosted LiveSync. The release is
-marked as a pre-release; real Obsidian and live gateway acceptance remain
-separate from the automated checks below.
+For an explicitly configured connection, use a URI such as
+`https://gateway.example.test/gateway/e2e-envelope`, or the retained
+`secureweb://gateway.example.test` scheme. Each device needs its own App Token.
+Ordinary CouchDB profiles continue to use the upstream transport.
 
-## Configuration
+App Token secrets are exchanged for bounded service sessions. The raw secret
+is not used as the bearer credential inside service requests. Both native and
+web-compatible requests, connection probes, and Security Seed reads use the
+configured sealed transport. A failed session or encryption operation stops
+the request without retrying the database request in plaintext.
 
-Add or edit a CouchDB connection profile under **Connection settings** →
-**Saved connections**. In the CouchDB Setup dialogue, enter:
+## Large attachment reads
 
-| Setting | Value |
-| --- | --- |
-| **URL** (`couchDB_URI`) | `https://notes.example.com/gateway/e2e-envelope` |
-| **Username** (`couchDB_USER`) | `secureweb` |
-| **Password** (`couchDB_PASSWORD`) | The SecureWeb access token |
-| **Database Name** (`couchDB_DBNAME`) | Your database name, such as `obsidian_vault` |
+Large batches of on-demand Chunks can exceed a gateway response buffer even
+when each document fits. The connector divides keyed `_all_docs` and
+`_bulk_get` queries into batches of at most four documents, then restores the
+original response order. A read which still returns a size-related error is
+retried with smaller batches. Writes and paginated queries retain their
+original behaviour. Concurrent large reads share a gateway queue.
 
-The gateway must publish its X-Wing key at
-`/.well-known/gateway-pubkey`, permit the target host `couchdb.local`, and
-have the corresponding terminator configured. The transport converts the
-connection's Basic password into a Bearer token inside the encrypted envelope.
-Neither the discovery request nor the outer envelope request carries that token.
-The gateway deployment determines the backend's credentials and permissions.
+For initial catch-up on a memory-constrained tablet, set **Batch size of
+on-demand fetching** to `1` under **Advanced**. The minimum accepted value is
+one. Keep Obsidian in the foreground until attachment downloads finish.
 
-Use **Test connection and save** for an existing profile. The onboarding
-actions described in [Settings](settings.md#connection-and-save-actions)
-can create a missing database only when that flow and the account permit it.
-Enable the desired Sync Mode after the connection succeeds.
+## Verification
 
-**Use Internal API** (`useRequestAPI`) selects Obsidian's native request adapter
-for the discovery request and encrypted envelope POST. The default uses the
-web-compatible adapter. Both paths seal CouchDB payloads. The native adapter
-does not guarantee cancellation of an HTTP request already in flight.
+Run `npm run test:secureweb` for the offline encrypted request/reply tests.
+They cover desktop and mobile API paths, XHR and requestUrl probes, profile
+credentials, gateway domain changes, request bodies, cancellation, and
+authentication failures. The suite runs before `npm run build` and in its own
+CI job. Run `npm run check` and `npm run test:unit` for the broader checks.
 
-## Upstream integration
-
-The fork uses the upstream 1.0.35 Replicator provider and owned-resource
-lifecycle. SecureWeb is attached to `ObsidianRemoteService`, the shared
-CouchDB HTTP boundary, so replication, connection probes, Security Seed
-preparation, and central administration use the same transport. Each request
-uses its connection's credentials, including a profile being tested before
-it becomes active. The public-key cache is separated by gateway origin.
-
-Only `/gateway/e2e-envelope` and its descendant paths activate this transport.
-The retained `secureweb://` URI spelling is normalised when opening a remote
-connection; use the HTTPS URL above in the Setup dialogue. Ordinary CouchDB
-URLs and Object Storage retain their upstream behaviour. No global `fetch`
-function is replaced.
-
-## Failure and verification
-
-Discovery failure, a denied target host, a revoked key, or decryption failure
-stops the encrypted request. There is no plaintext retry. Check the plug-in's
-log and the gateway's discovery, host policy, and terminator configuration
-before retrying. Use the recovery steps in [Troubleshooting](troubleshooting.md)
-for local database or Vault problems.
-
-At the public gateway boundary, CouchDB operations should appear as
-`POST /gateway/e2e-envelope` with `application/octet-stream` bodies. The sealed
-inner path retains the database path and query, such as
-`/obsidian_vault/_changes?since=0`, without the envelope endpoint prefix.
-
-The unit suite covers the TypeScript cryptographic round trip, Rust wire
-fixtures, HTTP service composition, profile isolation, adapter selection,
-and cancellation. Run `node --import tsx scripts/secureweb-http-interop-test.mjs`
-for a local HTTP peer check using Commonlib's actual PouchDB connection. It
-verifies sealed credentials, an encrypted reply, and owned connection closure.
-A live gateway and real Obsidian synchronisation require separate deployment
-testing.
+The tests use generated keys and synthetic credentials. Production deployment
+details, device tokens, Vault settings, and diagnostic exports belong outside
+the repository. A passing offline suite does not establish a physical-device
+or operator-specific gateway deployment result.

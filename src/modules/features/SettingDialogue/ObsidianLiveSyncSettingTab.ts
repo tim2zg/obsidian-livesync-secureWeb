@@ -52,7 +52,6 @@ import {
     type PageFunctions,
     type UpdateFunction,
 } from "./SettingPane.ts";
-import { compatGlobal } from "@vrtmrz/livesync-commonlib/compat/common/coreEnvFunctions";
 import { JournalSyncCore } from "@vrtmrz/livesync-commonlib/compat/replication/journal/JournalSyncCore";
 import { MinioStorageAdapter } from "@vrtmrz/livesync-commonlib/compat/replication/journal/objectstore/MinioStorageAdapter";
 import { closeObsidianSettings } from "@/common/obsidianSettings.ts";
@@ -100,6 +99,9 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
     }
     selectedScreen = "";
 
+    private localConfigurationPassphrase = "";
+    private localSettingsReadVersion = 0;
+
     _editingSettings?: AllSettings;
     // Buffered Settings for editing
     get editingSettings(): AllSettings {
@@ -133,7 +135,11 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
     applySetting(keys: AllSettingItemKey[]) {
         for (const k of keys) {
             if (!this.isDirty(k)) continue;
-            if (k in OnDialogSettingsDefault) {
+            if (
+                this.isReconstructionRequiredSetting(k) ||
+                this.isConfigurationEncryptionSetting(k) ||
+                k in OnDialogSettingsDefault
+            ) {
                 // //@ts-ignore
                 // this.initialSettings[k] = this.editingSettings[k];
                 continue;
@@ -141,25 +147,24 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
             this.copySettingValue(this.core.settings, this.editingSettings, k);
             this.copySettingValue(this.initialSettings, this.core.settings, k);
         }
-        keys.forEach((e) => this.refreshSetting(e));
+        keys.forEach((e) => {
+            if (this.isConfigurationEncryptionSetting(e) && this.isDirty(e)) return;
+            this.refreshSetting(e);
+        });
     }
-    applyAllSettings() {
-        const changedKeys = (Object.keys(this.editingSettings ?? {}) as AllSettingItemKey[]).filter((e) =>
-            this.isDirty(e)
+    async applyAllSettings() {
+        const changedKeys = (Object.keys(this.editingSettings ?? {}) as AllSettingItemKey[]).filter(
+            (e) => this.isDirty(e) && !this.isReconstructionRequiredSetting(e)
         );
+        await this.saveConfigurationEncryptionIfDirty(changedKeys);
         this.applySetting(changedKeys);
         this.reloadAllSettings();
     }
 
     async saveLocalSetting(key: keyof typeof OnDialogSettingsDefault) {
-        if (key == "configPassphrase") {
-            compatGlobal.localStorage.setItem("ls-setting-passphrase", this.editingSettings?.[key] ?? "");
-            return await Promise.resolve();
-        }
         if (key == "deviceAndVaultName") {
             this.services.setting.setDeviceAndVaultName(this.editingSettings?.[key] ?? "");
-            this.services.setting.saveDeviceAndVaultName();
-            return await Promise.resolve();
+            await this.services.setting.saveDeviceAndVaultName();
         }
     }
     /**
@@ -168,10 +173,10 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
      */
     async saveSettings(keys: AllSettingItemKey[]) {
         let hasChanged = false;
-        const appliedKeys = [] as AllSettingItemKey[];
-        for (const k of keys) {
-            if (!this.isDirty(k)) continue;
-            appliedKeys.push(k);
+        const appliedKeys = keys.filter((k) => this.isDirty(k) && !this.isReconstructionRequiredSetting(k));
+        await this.saveConfigurationEncryptionIfDirty(appliedKeys);
+        for (const k of appliedKeys) {
+            if (this.isConfigurationEncryptionSetting(k)) continue;
             if (k in OnDialogSettingsDefault) {
                 await this.saveLocalSetting(k as keyof OnDialogSettings);
                 this.copySettingValue(this.initialSettings, this.editingSettings, k);
@@ -192,7 +197,41 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
             .map((e) => Promise.resolve(e.handler(this.editingSettings[e.key])));
         await Promise.all(handlers);
         // }
-        keys.forEach((e) => this.refreshSetting(e));
+        keys.forEach((e) => {
+            if (this.isReconstructionRequiredSetting(e) && this.isDirty(e)) return;
+            if (this.isConfigurationEncryptionSetting(e) && this.isDirty(e)) return;
+            this.refreshSetting(e);
+        });
+    }
+
+    private isReconstructionRequiredSetting(key: AllSettingItemKey): boolean {
+        return key === "pathNormalizationVersion";
+    }
+
+    private isConfigurationEncryptionSetting(key: AllSettingItemKey): boolean {
+        return key === "configPassphraseStore" || key === "configPassphrase";
+    }
+
+    private async saveConfigurationEncryptionIfDirty(keys: AllSettingItemKey[]): Promise<void> {
+        if (!keys.some((key) => this.isConfigurationEncryptionSetting(key) && this.isDirty(key))) {
+            return;
+        }
+
+        const appliedConfigurationEncryption = {
+            configPassphraseStore: this.editingSettings.configPassphraseStore,
+            configPassphrase: this.editingSettings.configPassphrase,
+        };
+        await this.services.setting.changeConfigurationEncryption(
+            appliedConfigurationEncryption.configPassphraseStore,
+            appliedConfigurationEncryption.configPassphrase
+        );
+
+        if (appliedConfigurationEncryption.configPassphraseStore === "LOCALSTORAGE") {
+            this.localSettingsReadVersion++;
+            this.localConfigurationPassphrase = appliedConfigurationEncryption.configPassphrase;
+        }
+        this.copySettingValue(this.initialSettings, appliedConfigurationEncryption, "configPassphraseStore");
+        this.copySettingValue(this.initialSettings, appliedConfigurationEncryption, "configPassphrase");
     }
 
     /**
@@ -200,8 +239,8 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
      * @param keys setting keys for applying
      */
     async saveAllDirtySettings() {
-        const changedKeys = (Object.keys(this.editingSettings ?? {}) as AllSettingItemKey[]).filter((e) =>
-            this.isDirty(e)
+        const changedKeys = (Object.keys(this.editingSettings ?? {}) as AllSettingItemKey[]).filter(
+            (e) => this.isDirty(e) && !this.isReconstructionRequiredSetting(e)
         );
         await this.saveSettings(changedKeys);
         this.reloadAllSettings();
@@ -251,9 +290,21 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
         }
     }
 
+    private async readLocalSettings(): Promise<boolean> {
+        const version = ++this.localSettingsReadVersion;
+        const passphrase = await this.services.setting.deviceValues.getValue("ls-setting-passphrase", "");
+        if (version !== this.localSettingsReadVersion) return false;
+        this.localConfigurationPassphrase = passphrase;
+        return true;
+    }
+
+    async loadSettings(): Promise<void> {
+        if (await this.readLocalSettings()) this.reloadAllSettings(true);
+    }
+
     reloadAllLocalSettings() {
         const ret = { ...OnDialogSettingsDefault };
-        ret.configPassphrase = compatGlobal.localStorage.getItem("ls-setting-passphrase") || "";
+        ret.configPassphrase = this.localConfigurationPassphrase;
         ret.preset = "";
         ret.deviceAndVaultName = this.services.setting.getDeviceAndVaultName();
         return ret;
@@ -272,10 +323,46 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
      * Reread all settings and request invalidate
      */
     reloadAllSettings(skipUpdate: boolean = false) {
+        const previousSettings = this._editingSettings;
+        const previousSnapshot = this.initialSettings;
+        const pendingPathNormalizationVersion =
+            previousSettings && previousSnapshot && this.isDirty("pathNormalizationVersion")
+                ? {
+                      value: previousSettings.pathNormalizationVersion,
+                      appliedValue: previousSnapshot.pathNormalizationVersion,
+                  }
+                : undefined;
+        const pendingConfigurationEncryption =
+            previousSettings && previousSnapshot
+                ? {
+                      configPassphraseStore: isObjectDifferent(
+                          previousSettings.configPassphraseStore,
+                          previousSnapshot.configPassphraseStore
+                      )
+                          ? { value: previousSettings.configPassphraseStore }
+                          : undefined,
+                      configPassphrase: isObjectDifferent(
+                          previousSettings.configPassphrase,
+                          previousSnapshot.configPassphrase
+                      )
+                          ? { value: previousSettings.configPassphrase }
+                          : undefined,
+                  }
+                : undefined;
         const localSetting = this.reloadAllLocalSettings();
         this._editingSettings = { ...this.core.settings, ...localSetting };
         this._editingSettings = { ...this.editingSettings, ...this.computeAllLocalSettings() };
         this.initialSettings = { ...this.editingSettings };
+        if (pendingConfigurationEncryption?.configPassphraseStore) {
+            this._editingSettings.configPassphraseStore = pendingConfigurationEncryption.configPassphraseStore.value;
+        }
+        if (pendingConfigurationEncryption?.configPassphrase) {
+            this._editingSettings.configPassphrase = pendingConfigurationEncryption.configPassphrase.value;
+        }
+        if (pendingPathNormalizationVersion) {
+            this._editingSettings.pathNormalizationVersion = pendingPathNormalizationVersion.value;
+            this.initialSettings.pathNormalizationVersion = pendingPathNormalizationVersion.appliedValue;
+        }
         if (!skipUpdate) this.requestUpdate();
     }
 
@@ -283,6 +370,10 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
      * Reread each setting and request invalidate
      */
     refreshSetting(key: AllSettingItemKey) {
+        if (this.isReconstructionRequiredSetting(key) && this.isDirty(key)) {
+            this.requestUpdate();
+            return;
+        }
         const localSetting = this.reloadAllLocalSettings();
         if (key in this.core.settings) {
             if (key in localSetting) {
@@ -328,7 +419,7 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
         this.plugin = plugin;
         Setting.env = this;
         eventHub.onEvent(EVENT_REQUEST_RELOAD_SETTING_TAB, () => {
-            this.requestReload();
+            void this.requestReload().catch((error: unknown) => Logger(error, LOG_LEVEL_NOTICE));
         });
         this.addOnSaved("displayLanguage", () => this.requestCatalogueRefresh());
         this.addOnSaved("showStatusOnEditor", () => eventHub.emitEvent(EVENT_ON_UNRESOLVED_ERROR));
@@ -471,7 +562,8 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
         );
     }
 
-    requestReload() {
+    async requestReload(): Promise<void> {
+        if (!(await this.readLocalSettings())) return;
         const nativeTabIsShown =
             this.supportsDeclarativeSettings() && this.containerEl !== undefined && this.containerEl.isShown();
         if (this.isShown || nativeTabIsShown) {
@@ -577,6 +669,7 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
             "passphrase",
             "useDynamicIterationCount",
             "usePathObfuscation",
+            "pathNormalizationVersion",
             "encrypt",
             // "remoteType",
         ]);
@@ -587,6 +680,7 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
             "passphrase",
             "useDynamicIterationCount",
             "usePathObfuscation",
+            "pathNormalizationVersion",
             "encrypt",
         ]);
     }
@@ -632,16 +726,23 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
 
     override getControlValue(key: string): unknown {
         const spec = this.getDeclarativeSettingSpec(key);
-        return this.editingSettings[spec.key];
+        const value = this.editingSettings[spec.key];
+        return spec.control.type === "numeric-dropdown" ? `${value}` : value;
     }
 
     override async setControlValue(key: string, value: unknown): Promise<void> {
         const spec = this.getDeclarativeSettingSpec(key);
-        if (!isValidSettingSpecValue(spec, value)) {
+        const persistedValue =
+            spec.control.type === "numeric-dropdown" && typeof value === "string" ? Number(value) : value;
+        if (!isValidSettingSpecValue(spec, persistedValue)) {
             throw new TypeError(`Invalid value for declarative setting ${key}`);
         }
-        Reflect.set(this.editingSettings, spec.key, value);
-        await this.saveSettings([spec.key]);
+        Reflect.set(this.editingSettings, spec.key, persistedValue);
+        if (spec.holdValue) {
+            this.requestUpdate();
+        } else {
+            await this.saveSettings([spec.key]);
+        }
     }
 
     private createRebuildRequiredAction(): SettingDefinitionAction {
@@ -1009,6 +1110,15 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
     };
 
     rebuildDB = async (method: "localOnly" | "remoteOnly" | "rebuildBothByThisDevice" | "localOnlyWithChunks") => {
+        if (method === "remoteOnly" && this.isDirty("pathNormalizationVersion")) {
+            Logger(
+                $msg(
+                    "CouchDB only. Version 0 preserves legacy path identity; version 1 uses Unicode NFC. Physical file names stay unchanged. Update every device and stop synchronisation, then Rebuild both databases from a complete authoritative Vault and Fetch on the other devices. Resolve colliding file names first. P2P and Object Storage do not support version 1."
+                ),
+                LOG_LEVEL_NOTICE
+            );
+            return;
+        }
         if (this.editingSettings.encrypt && this.editingSettings.passphrase == "") {
             Logger($msg("obsidianLiveSyncSettingTab.logEncryptionNoPassphrase"), LOG_LEVEL_NOTICE);
             return;
@@ -1020,7 +1130,7 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
         if (!this.editingSettings.encrypt) {
             this.editingSettings.passphrase = "";
         }
-        this.applyAllSettings();
+        await this.applyAllSettings();
         await this.services.setting.suspendAllSync();
         await this.services.setting.suspendExtraSync();
         this.reloadAllSettings();
@@ -1059,6 +1169,7 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
                     this.editingSettings.passphrase = "";
                 }
                 await this.saveAllDirtySettings();
+                await this.applyReconstructionRequiredSettings();
             },
         });
         if (result.result === "scheduled") {
@@ -1066,6 +1177,9 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
             return;
         }
         if (result.result === "failed") {
+            return;
+        }
+        if (this.isDirty("pathNormalizationVersion")) {
             return;
         }
 
@@ -1084,6 +1198,23 @@ export class ObsidianLiveSyncSettingTab extends PluginSettingTab {
             }
             await this.saveAllDirtySettings();
         }
+    }
+
+    private async applyReconstructionRequiredSettings(): Promise<void> {
+        const key = "pathNormalizationVersion";
+        if (!this.isDirty(key)) return;
+
+        const previousValue = this.core.settings.pathNormalizationVersion;
+        this.copySettingValue(this.core.settings, this.editingSettings, key);
+        try {
+            await this.services.setting.saveSettingData();
+        } catch (error) {
+            this.core.settings.pathNormalizationVersion = previousValue;
+            throw error;
+        }
+
+        this.copySettingValue(this.initialSettings, this.core.settings, key);
+        this.refreshSetting(key);
     }
 
     // The imperative renderer remains required by the declared Obsidian 1.7.2 minimum version.

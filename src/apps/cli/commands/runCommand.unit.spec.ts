@@ -23,6 +23,8 @@ import {
     replicationFailed,
 } from "@vrtmrz/livesync-commonlib/replication";
 
+vi.mock("node:fs/promises", { spy: true });
+
 function createStandardIoMock() {
     return {
         readStdin: vi.fn(async () => ""),
@@ -115,6 +117,10 @@ function createCoreMock() {
             databaseFileAccess: {
                 fetch: vi.fn(async () => undefined),
                 storeContent: vi.fn(async () => true),
+            },
+            rebuilder: {
+                $rebuildEverything: vi.fn(async () => undefined),
+                $fetchLocal: vi.fn(async () => undefined),
             },
         },
     } as any;
@@ -266,6 +272,73 @@ describe("runCommand abnormal cases", () => {
         vi.restoreAllMocks();
     });
 
+    it.each(["rebuild", "fetch"] as const)("requires --force before activating for %s", async (command) => {
+        const core = createCoreMock();
+        const activated = vi.fn(() => Promise.resolve());
+        Object.defineProperty(core.services.control, "activated", { get: activated });
+
+        await expect(runCommand(makeOptions(command, []), { ...context, core })).resolves.toBe(false);
+
+        expect(activated).not.toHaveBeenCalled();
+        expect(core.serviceModules.rebuilder.$rebuildEverything).not.toHaveBeenCalled();
+        expect(core.serviceModules.rebuilder.$fetchLocal).not.toHaveBeenCalled();
+        expect(core.services.context.standardIo.writeStderr).toHaveBeenCalledWith(
+            expect.stringContaining("requires --force")
+        );
+    });
+
+    it("dispatches a forced rebuild to the existing Rebuilder service", async () => {
+        const core = createCoreMock();
+        const options = makeOptions("rebuild", []);
+        options.force = true;
+
+        await expect(runCommand(options, { ...context, core })).resolves.toBe(true);
+
+        expect(core.serviceModules.rebuilder.$rebuildEverything).toHaveBeenCalledOnce();
+        expect(core.serviceModules.rebuilder.$fetchLocal).not.toHaveBeenCalled();
+    });
+
+    it("dispatches a forced fetch without saving legacy Vault files first", async () => {
+        const core = createCoreMock();
+        const options = makeOptions("fetch", []);
+        options.force = true;
+
+        await expect(runCommand(options, { ...context, core })).resolves.toBe(true);
+
+        expect(core.serviceModules.rebuilder.$fetchLocal).toHaveBeenCalledOnce();
+        expect(core.serviceModules.rebuilder.$fetchLocal).toHaveBeenCalledWith(false, true);
+        expect(core.serviceModules.rebuilder.$rebuildEverything).not.toHaveBeenCalled();
+    });
+
+    it("rejects fetch in remediation mode even when forced", async () => {
+        const core = createCoreMock();
+        core.services.setting.currentSettings().maxMTimeForReflectEvents = 1;
+        const options = makeOptions("fetch", []);
+        options.force = true;
+
+        await expect(runCommand(options, { ...context, core })).resolves.toBe(false);
+
+        expect(core.serviceModules.rebuilder.$fetchLocal).not.toHaveBeenCalled();
+        expect(core.services.context.standardIo.writeStderr).toHaveBeenCalledWith(
+            expect.stringContaining("remediation mode")
+        );
+    });
+
+    it("surfaces an internal rebuild refusal as a failed command", async () => {
+        const core = createCoreMock();
+        core.serviceModules.rebuilder.$rebuildEverything.mockRejectedValue(
+            new Error("Rebuilding is not available while remediation mode is active.")
+        );
+        const options = makeOptions("rebuild", []);
+        options.force = true;
+
+        await expect(runCommand(options, { ...context, core })).resolves.toBe(false);
+
+        expect(core.services.context.standardIo.writeStderr).toHaveBeenCalledWith(
+            expect.stringContaining("Rebuilding is not available while remediation mode is active")
+        );
+    });
+
     it("retains visible progress for the interactive sync command", async () => {
         const core = createCoreMock();
 
@@ -362,6 +435,38 @@ describe("runCommand abnormal cases", () => {
         expect(result).toBe(false);
         expect(core.serviceModules.databaseFileAccess.fetch).toHaveBeenCalledWith("file.md", "9-invalid", true);
     });
+
+    it.each([
+        { birthtimeMs: 1000.9, expectedCtime: 1000 },
+        { birthtimeMs: 0, expectedCtime: 2000 },
+    ])(
+        "push selects the source creation time with a change-time fallback (%j)",
+        async ({ birthtimeMs, expectedCtime }) => {
+            const core = createCoreMock();
+            const directory = await fs.mkdtemp(path.join(os.tmpdir(), "livesync-push-time-"));
+            const source = path.join(directory, "source.md");
+            await fs.writeFile(source, "content");
+            const sourceStat = await fs.stat(source);
+            const stat = vi
+                .spyOn(fs, "stat")
+                .mockResolvedValue({ ...sourceStat, birthtimeMs, ctimeMs: 2000.8, mtimeMs: 3000.7 });
+            try {
+                const context = { core, vaultPath: "/tmp/vault", databasePath: "/tmp/vault" } as any;
+                expect(await runCommand(makeOptions("push", [source, "note.md"]), context)).toBe(true);
+                expect(core.serviceModules.storageAccess.writeFileAuto).toHaveBeenCalledWith(
+                    "note.md",
+                    expect.any(ArrayBuffer),
+                    {
+                        ctime: expectedCtime,
+                        mtime: 3000,
+                    }
+                );
+            } finally {
+                stat.mockRestore();
+                await fs.rm(directory, { recursive: true, force: true });
+            }
+        }
+    );
 
     it("push rejects when source file does not exist", async () => {
         const core = createCoreMock();

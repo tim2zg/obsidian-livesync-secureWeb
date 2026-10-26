@@ -166,6 +166,14 @@ Legacy Modules remain grouped by directory:
 - `features/` contains optional features; and
 - `extras/` contains development and testing tools.
 
+### UI commands and dialogue ownership
+
+Declare shared UI requests with `declareUICommand<Request, Result>` from `@vrtmrz/livesync-commonlib/ui-commands`. The host's `services.UI.commands` registry owns one handler per declaration. A serviceFeature registers the handler, releases it on unload, and owns the associated dialogue lifetime. Callers receive a typed result or an explicit `unavailable` result; handler failures propagate.
+
+`OPEN_JOINED_DEVICES` is shared by Remote Configuration, version Notices, and the command palette. `useJoinedDevicesFeature` registers it once and gives the dialogue narrow refresh, forget, and cancellation callbacks. Each remote operation uses a settings snapshot and releases its finite resource in `finally`. Results from an old remote configuration or a closed dialogue are discarded. A write already sent to the captured remote can still complete after the dialogue closes.
+
+The registry belongs to one UIService instance. Reuse the same declaration object at each call site, and keep active UI cleanup in the feature and dialogue owner. `UIService` disposes the registry when the host's context emits the plug-in-unloaded event.
+
 ### Key Architectural Components
 
 - **LiveSyncLocalDB** (`@vrtmrz/livesync-commonlib/compat/pouchdb/LiveSyncLocalDB`): Local PouchDB database wrapper
@@ -204,6 +212,9 @@ The [multiple-device conflict test procedure](test/README.md#multiple-device-con
 
 ### File Structure Conventions
 
+- **Class modules**: Start a new or renamed TypeScript or JavaScript filename with an upper-case letter when the file contains a class with the same name.
+- **Function modules**: Start the filename with a lower-case letter when the module primarily exports functions, such as `initialFetchFastForward.ts`. Follow the surrounding filename style for the rest of the basename. Corresponding test files use the same basename.
+- **Existing files**: Retain established names for unrelated files and separate conventions for components or other file types.
 - **Platform-specific code**: Use `.platform.ts` suffix (replaced with `.obsidian.ts` in production builds via esbuild)
 - **Development code**: Use `.dev.ts` suffix (replaced with `.prod.ts` in production)
 - **Path aliases**: `@/*` maps to `src/*`; Commonlib uses package exports rather than a source alias
@@ -244,6 +255,18 @@ The measurement uses fixed in-memory inputs and keys, with no Vault, database, s
 Where `performance.memory` is available, the report includes approximate JavaScript heap samples before, during, and after measurement. These may include other Obsidian activity and garbage collection; they are neither total process RAM nor an exact peak. Unsupported devices explicitly report that heap measurements are unavailable.
 
 The developer-only adapter in `src/features/ReviewHarness/reviewHarnessIdBenchmarkRuntime.ts` imports `HashManager` from Commonlib's public `/hashing` entry. Compilation, packed-package checks, and runtime tests cover this boundary. The algorithms remain owned by Commonlib.
+
+#### File content hash performance measurements
+
+Commonlib owns the algorithm choice and provenance contract. Its [file-reflection content hash decision](https://github.com/vrtmrz/livesync-commonlib/blob/main/docs/file-reflection-content-hash.md) records the SHA-256 rationale, xxHash64 comparison, measured costs, and conditions for reconsideration. This section describes the host-owned measurement procedure.
+
+Choose **Run** beside **File content hash performance** in the Review Harness. **Automatic** does not run this measurement; **Full review** includes it.
+
+The measurement compares the Self-hosted LiveSync SHA-256 file content hash helper with `xxHash64` for fixed in-memory `Blob` inputs of 4 KiB, 64 KiB, 1 MiB, and 50 MiB. Each input begins with the same deterministic byte sequence. Input construction is excluded from the timed samples; `xxHash64` engine initialisation is timed and reported separately. One 4-KiB warm-up call per algorithm is also measured separately and excluded from samples. SHA-256 uses the same helper as the product's file content hash path; `xxHash64` timing includes `Blob.arrayBuffer()` and `h64Raw`. Calls run one at a time, alternate algorithm order between samples, and yield to the interface between calls. The 50-MiB input uses the same three samples as the other sizes.
+
+The report gives the median and range for each algorithm and input size. Where `performance.memory` is available, it also records approximate JavaScript heap samples before, during, and after measurement. These samples may include other Obsidian activity and garbage collection; they are neither total process RAM nor a guaranteed peak. Unsupported devices explicitly report that heap measurements are unavailable.
+
+The scenario uses only fixed in-memory inputs. It does not read or write the Vault, database, settings, remote storage, or user content. It does not expose a hash-method setting or use a fixed performance threshold. The developer-only adapter in `src/features/ReviewHarness/reviewHarnessFileContentHashBenchmarkRuntime.ts` imports `computeFileContentHash` from Commonlib's public `/hashing` entry and `xxhashNew()` from `octagonal-wheels`. The benchmark compares the product helper with that package implementation; it does not change the hash method used by LiveSync.
 
 #### Logs
 
@@ -297,6 +320,8 @@ Existing legacy Modules continue to register their handlers in `onBindFunction()
   database and Replicator readiness. See
   [the declarative settings adapter ADR](docs/adr/2026_08_declarative_settings_adapter.md).
 - Use `this.services.setting.saveSettingData()` instead of using plugin methods directly
+- Inject `@vrtmrz/value-store` at host composition. `setting.deviceValues` uses exact device-local keys; `setting.config` and the Service Hub `config` share the existing Vault and database-suffix scope. Await reads, writes, and deletions before advancing the workflow. Browser and Obsidian hosts retain their Web Storage keys, and the CLI retains its existing flat JSON string map.
+- Seed the settings tab with `await settingTab.loadSettings()` before registration. Its editing buffer remains synchronous for Obsidian rendering; storage failures must not replace a previously loaded value with an empty default.
 
 ### Database Operations
 
@@ -311,11 +336,13 @@ Existing legacy Modules continue to register their handlers in `onBindFunction()
 
 ## Pre-release Policy
 
+This policy governs plug-in pre-releases and their accompanying CLI images. For a correction needed only by the CLI, use [CLI-only patch releases](#cli-only-patch-releases).
+
 - Use SemVer beta identifiers such as `1.0.0-beta.0` for immutable integration previews. Increment the beta number when a published preview needs a correction. Reserve `1.0.0-rc.0` for the first feature- and contract-frozen release candidate. Historical `-patchedN` releases remain unchanged in the release history.
 - Publish a pre-release from an immutable reviewed tag, mark its GitHub Release as a pre-release, and do not replace the latest stable release.
 - A plug-in review release may omit the CLI image when the CLI artefact is not part of the required validation. When a pre-release CLI image is published, it receives immutable version and SHA-qualified tags only; it must not advance `latest` or a stable major-minor tag.
 - Keep a hyphenated pre-release's release pull request in draft and unmerged after BRAT validation. Reconcile the published version's metadata into its base branch through a reviewed metadata-only commit, then close the release pull request only through a separate maintainer action.
-- Stage a stable version for BRAT by publishing its exact `x.y.z` tag initially as a GitHub pre-release with `prerelease=true` and `publish_cli=false`. The stable manifest version would otherwise make the CLI workflow advance `latest` and the major-minor image tag before validation.
+- Stage a stable version for BRAT by publishing its exact `x.y.z` tag initially as a GitHub pre-release with `prerelease=true` and `publish_cli=false`. A stable CLI release tag would otherwise make the CLI workflow advance `latest` and the major-minor image tag before validation.
 - After a staged stable version passes BRAT validation, remove the GitHub pre-release designation and make the exact release the latest stable release first. Confirm that promotion, then merge its exact release commit into the reviewed base branch and integrate it through the reviewed branch chain into the repository's default branch. This order prevents Community Directory review from inspecting a stable manifest version while the matching GitHub Release remains a pre-release. Publish stable CLI tags through a separate maintainer gate.
 - If validation fails, leave every published tag unchanged and prepare the next pre-release or patch version.
 
@@ -333,6 +360,7 @@ Existing legacy Modules continue to register their handlers in `onBindFunction()
 
 This workflow is for maintainers. Contributors should update `## Unreleased` for user-facing feature or fix PRs, but do not need to run the release workflows.
 The `Finalise Release Tags` and `Release Obsidian Plugin` workflows use the `release` GitHub Environment. Configure Environment protection in the repository settings so tag creation and release publication require maintainer approval.
+For a fix needed only by the CLI, use [CLI-only patch releases](#cli-only-patch-releases). The steps below describe plug-in releases.
 
 - Run the `Prepare Release PR` workflow with the target version and selected base branch. It creates the release branch, updates versions, confirms that Commonlib is locked to an immutable package version, moves the `## Unreleased` notes to the target version, commits the release preparation, pushes the branch, and opens a draft release PR. The base branch may already select the target development version; the workflow still runs the version lifecycle so that release-only metadata such as `versions.json` is recorded in the release commit.
 - Do not tag the release branch when the PR is first created. Polish the release PR first, especially `updates.md`.
@@ -341,7 +369,7 @@ The `Finalise Release Tags` and `Release Obsidian Plugin` workflows use the `rel
 - For a hyphenated pre-release, run finalisation with `prerelease=true`; CLI publication remains optional. For a stable version awaiting BRAT validation, use `prerelease=true` and `publish_cli=false`.
 - Approve the `Release Obsidian Plugin` workflow for the `release` environment, then inspect the generated draft GitHub Release. When a hyphenated pre-release includes the CLI, confirm that it received only its immutable version and SHA-qualified image tags.
 - Publish the draft as a GitHub pre-release without replacing the latest stable release. Keep its release pull request in draft and leave its base branch unchanged throughout BRAT validation. Record that state in the pull request.
-- Validate the published release through BRAT. Confirm start-up, ordinary bidirectional synchronisation, and any regression scenario relevant to the release.
+- Validate installation or update through BRAT, and cold-start Obsidian to confirm the plug-in loads. Verify ordinary bidirectional synchronisation and relevant regression scenarios in real Obsidian against the published artefacts, or a build with matching hashes. When automated scenarios establish that coverage, BRAT acceptance need only cover installation or update and start-up; manually check any remaining release-specific behaviour. Record the artefact hashes and validation evidence as described in the [real Obsidian test guide](test/e2e-obsidian/README.md#combined-setup-and-security-regression-checks).
 - After a hyphenated pre-release passes, keep its release pull request unmerged. Add a reviewed metadata-only commit to the selected base branch which records the published version in `versions.json` and moves its exact tagged release notes out of `## Unreleased`, then close the release pull request only through a separate maintainer action.
 - After a stable version passes, remove the GitHub pre-release designation and make that exact release the latest stable release. Confirm that the release is no longer a pre-release, then mark its release pull request ready, merge the exact release commit into the selected base branch with a merge commit, and integrate that exact commit through the reviewed branch chain into the repository's default branch. Confirm that the default branch contains the matching stable metadata. Create the stable CLI tag and publish its `latest` and major-minor image tags, if selected, through a separate maintainer gate.
 - If BRAT validation fails, keep the release PR in draft and do not move published tags. Before preparing the next version, add a reviewed metadata-only commit to the selected base branch which records the published version in `versions.json` and moves its exact tagged release notes out of `## Unreleased`. Keep only changes made after that tag under `## Unreleased`. Compare the historical section with `git show <tag>:updates.md`; do not merge the failed release PR or describe it as validated. The next release PR can then rotate only the correction notes while preserving the immutable release history.
@@ -376,6 +404,60 @@ The `Finalise Release Tags` and `Release Obsidian Plugin` workflows use the `rel
 10. After a hyphenated pre-release passes, keep its release PR unmerged, reconcile its `versions.json` entry and exact release-note section into the selected base branch as metadata only, then close the PR through a separate maintainer action.
 11. After a stable version passes, remove the pre-release designation and make the exact release the latest stable release. Confirm that promotion, then mark the release PR ready, merge the exact release commit into the selected base branch, and integrate it through the reviewed branch chain into the repository's default branch. Confirm that the default branch contains the matching stable metadata, then publish stable CLI tags through a separate maintainer gate if selected.
 12. If validation fails, leave the PR in draft and do not move the published tags. Reconcile the published version's `updates.md` section and `versions.json` entry into the base branch as metadata only, then prepare the next patch or pre-release version from the remaining `## Unreleased` entries.
+
+### CLI-only patch releases
+
+Use this route when a correction affects only CLI commands, CLI host behaviour, or the CLI Docker image. For a change which also affects the Obsidian plug-in, use the plug-in release workflow above.
+
+A CLI-only patch publishes a Docker image from a reviewed commit using `x.y.z-patchN-cli`, for example `1.0.36-patch1-cli`. Keep `x.y.z` as the underlying plug-in version and increment `N` for each CLI-only correction. The image version comes from the CLI Git tag. Keep the plug-in version metadata unchanged: assigning this tag does not require a version bump, a `versions.json` entry, a plug-in tag, or a GitHub Release. Record the fix under `## Unreleased`; leave the plug-in release-note lifecycle for the next plug-in release.
+
+1. Review and integrate the CLI fix, including its relevant CLI or Docker regression tests. Select a source branch whose reviewed commit contains both the fix and the CLI release workflow. Record that exact commit and confirm that the proposed patch tag is unused:
+
+    ```bash
+    CLI_RELEASE_BRANCH=main
+    CLI_PATCH_TAG=1.0.36-patch1-cli
+    git fetch origin "$CLI_RELEASE_BRANCH" --tags
+    CLI_RELEASE_COMMIT=$(git rev-parse "origin/${CLI_RELEASE_BRANCH}^{commit}")
+    git show --no-patch --oneline "$CLI_RELEASE_COMMIT"
+    git ls-remote --tags origin "refs/tags/$CLI_PATCH_TAG"
+    ```
+
+    The last command must succeed without returning a tag. If the tag already exists, choose the next patch number; keep published tags unchanged.
+
+2. Run the Docker workflow without publication before pushing the tag:
+
+    ```bash
+    gh workflow run cli-docker.yml --ref "$CLI_RELEASE_BRANCH" --field dry_run=true --field force=false
+    ```
+
+    Wait for success and verify that the run's head SHA is exactly `$CLI_RELEASE_COMMIT`. Both native amd64 and arm64 Docker E2E suites must pass. If the branch has advanced, review and validate the intended commit again. A branch dry run uses `edge` on `main` or a development tag on another branch; it validates the image and publication preparation without reserving the patch tag.
+
+3. After maintainer approval of the exact commit and tag, create and push only the CLI tag:
+
+    ```bash
+    git tag "$CLI_PATCH_TAG" "$CLI_RELEASE_COMMIT"
+    git push origin "refs/tags/$CLI_PATCH_TAG"
+    ```
+
+    Pushing this tag with maintainer credentials starts `Build and Push CLI Docker Image` and publishes after both architecture validations pass. This route uses `cli-docker.yml`; the plug-in release preparation and finalisation workflows are not needed.
+
+4. If automation pushed the tag using `GITHUB_TOKEN`, explicitly dispatch publication against that existing tag. Such a push does not start another workflow ([GitHub workflow trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)):
+
+    ```bash
+    gh workflow run cli-docker.yml --ref "$CLI_PATCH_TAG" --field dry_run=false --field force=false
+    ```
+
+    Use this dispatch when the tag push did not start publication, rather than starting a second publication alongside an existing run.
+
+5. Confirm that the workflow completed and the published image contains `linux/amd64` and `linux/arm64`:
+
+    ```bash
+    CLI_IMAGE="ghcr.io/vrtmrz/livesync-cli:$CLI_PATCH_TAG"
+    docker buildx imagetools inspect "$CLI_IMAGE"
+    docker run --rm "$CLI_IMAGE" --help
+    ```
+
+    Retest the corrected CLI behaviour using this exact image tag. A patch receives its full version tag and a SHA-qualified tag, such as `1.0.36-patch1-sha-<commit>-cli`. Publishing that patch tag does not update `latest`, `edge`, or the stable major-minor tag. Consumers must select the full patch tag explicitly.
 
 ## Contribution Guidelines
 

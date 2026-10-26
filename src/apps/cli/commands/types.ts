@@ -22,6 +22,8 @@ export type CLICommand =
     | "rm"
     | "resolve"
     | "mirror"
+    | "rebuild"
+    | "fetch"
     | "remote-add"
     | "remote-rm"
     | "remote-ls"
@@ -49,6 +51,16 @@ export interface CLIOptions {
     interval?: number;
 }
 
+export type CLIP2PHostSettings = Pick<
+    ObsidianLiveSyncSettings,
+    | "P2P_Enabled"
+    | "P2P_AutoAccepting"
+    | "P2P_AutoStart"
+    | "P2P_AutoBroadcast"
+    | "P2P_AutoSyncPeers"
+    | "P2P_AutoWatchPeers"
+>;
+
 export interface CLICommandContext {
     databasePath: string;
     vaultPath: string;
@@ -58,6 +70,8 @@ export interface CLICommandContext {
     /** Current-result contract owned by the P2P service feature. */
     p2pReplicator?: UseP2PReplicatorResult;
     settingsPath: string;
+    /** Configured P2P policy before temporary CLI startup suspension. */
+    originalP2PSettings: CLIP2PHostSettings;
     originalSyncSettings: Pick<
         ObsidianLiveSyncSettings,
         | "liveSync"
@@ -88,6 +102,8 @@ export const VALID_COMMANDS = new Set([
     "rm",
     "resolve",
     "mirror",
+    "rebuild",
+    "fetch",
     "remote-add",
     "remote-rm",
     "remote-ls",

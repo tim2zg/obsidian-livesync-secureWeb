@@ -10,12 +10,13 @@ import {
 import { createBlob, escapeMarkdownValue, readAsBlob } from "@vrtmrz/livesync-commonlib/compat/common/utils";
 import { Logger } from "@vrtmrz/livesync-commonlib/compat/common/logger";
 import { shouldBeIgnored } from "@vrtmrz/livesync-commonlib/compat/string_and_binary/path";
-import { Menu, diff_match_patch, setIcon } from "@/deps.ts";
+import { Menu, TFile, diff_match_patch, setIcon } from "@/deps.ts";
 import { $msg } from "@/common/translation";
 import { Semaphore } from "octagonal-wheels/concurrency/semaphore";
 import { LiveSyncSetting as Setting } from "./LiveSyncSetting.ts";
 import {
     EVENT_ANALYSE_DB_USAGE,
+    EVENT_INSPECT_DB_INTEGRITY,
     EVENT_REQUEST_CHECK_REMOTE_SIZE,
     EVENT_REQUEST_RUN_DOCTOR,
     EVENT_REQUEST_RUN_FIX_INCOMPLETE,
@@ -61,37 +62,11 @@ import {
     executeMetadataIdentityRepair,
     MetadataIdentityRepairExecutions,
 } from "@/serviceFeatures/metadataIdentityRepair.ts";
+import { showDiagnosticFileLookup } from "@/serviceFeatures/diagnosticFileLookup.ts";
 export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement, { addPanel }: PageFunctions): void {
     // const hatchWarn = this.createEl(paneEl, "div", { text: `To stop the boot up sequence for fixing problems on databases, you can put redflag.md on top of your vault (Rebooting obsidian is required).` });
     // hatchWarn.addClass("op-warn-info");
-    void addPanel(paneEl, $msg("Setting.TroubleShooting")).then((paneEl) => {
-        new Setting(paneEl)
-            .setName($msg("Setting.TroubleShooting.Doctor"))
-            .setDesc($msg("Setting.TroubleShooting.Doctor.Desc"))
-            .addButton((button) =>
-                button
-                    .setButtonText($msg("Run Doctor"))
-                    .setCta()
-                    .setDisabled(false)
-                    .onClick(() => {
-                        this.closeSetting();
-                        eventHub.emitEvent(EVENT_REQUEST_RUN_DOCTOR, $msg("you wanted(Thank you)!"));
-                    })
-            );
-        new Setting(paneEl)
-            .setName($msg("Setting.TroubleShooting.ScanBrokenFiles"))
-            .setDesc($msg("Setting.TroubleShooting.ScanBrokenFiles.Desc"))
-            .addButton((button) =>
-                button
-                    .setButtonText("Scan for Broken files")
-                    .setCta()
-                    .setDisabled(false)
-                    .onClick(() => {
-                        this.closeSetting();
-                        eventHub.emitEvent(EVENT_REQUEST_RUN_FIX_INCOMPLETE);
-                    })
-            );
-
+    void addPanel(paneEl, "Reporting Tools").then((paneEl) => {
         new Setting(paneEl).setName($msg("Prepare the 'report' to create an issue")).addButton((button) =>
             button
                 .setButtonText($msg("Copy Report to clipboard"))
@@ -114,6 +89,29 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                 })
             );
         new Setting(paneEl)
+            .setName($msg("Find a file from a report pseudonym"))
+            .setDesc(
+                $msg(
+                    "Find matching paths in this Vault and local Metadata, then prepare a follow-up report using the same pseudonyms."
+                )
+            )
+            .addButton((button) =>
+                button.setButtonText($msg("Find file")).onClick(async () => {
+                    await showDiagnosticFileLookup(this.core, async (path) => {
+                        const file = this.app.vault.getAbstractFileByPath(path);
+                        if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
+                    });
+                })
+            );
+        new Setting(paneEl)
+            .setName($msg("Inspect database integrity"))
+            .setDesc(
+                $msg("Read normal-file Metadata and current conflicts locally and in CouchDB, then compare content for suspect groups. Choose original names or pseudonyms before starting.")
+            )
+            .addButton((button) =>
+                button.setButtonText($msg("Inspect")).onClick(() => eventHub.emitEvent(EVENT_INSPECT_DB_INTEGRITY))
+            );
+        new Setting(paneEl)
             .setName($msg("Analyse database usage"))
             .setDesc(
                 $msg(
@@ -125,6 +123,38 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                     eventHub.emitEvent(EVENT_ANALYSE_DB_USAGE);
                 })
             );
+    });
+
+    void addPanel(paneEl, "Checks and Recovery").then((paneEl) => {
+        new Setting(paneEl)
+            .setName($msg("Setting.TroubleShooting.Doctor"))
+            .setDesc($msg("Setting.TroubleShooting.Doctor.Desc"))
+            .addButton((button) =>
+                button
+                    .setButtonText($msg("Run Doctor"))
+                    .setCta()
+                    .setDisabled(false)
+                    .onClick(() => {
+                        this.closeSetting();
+                        eventHub.emitEvent(EVENT_REQUEST_RUN_DOCTOR, $msg("you wanted(Thank you)!"));
+                    })
+            );
+        new Setting(paneEl)
+            .setName($msg("Setting.TroubleShooting.ScanBrokenFiles"))
+            .setDesc($msg("Setting.TroubleShooting.ScanBrokenFiles.Desc"))
+            .addButton((button) =>
+                button
+                    .setButtonText($msg("Scan for Broken files"))
+                    .setCta()
+                    .setDisabled(false)
+                    .onClick(() => {
+                        this.closeSetting();
+                        eventHub.emitEvent(EVENT_REQUEST_RUN_FIX_INCOMPLETE);
+                    })
+            );
+    });
+
+    void addPanel(paneEl, $msg("Setting.TroubleShooting")).then((paneEl) => {
         new Setting(paneEl)
             .setName($msg("Reset notification threshold and check the remote database usage"))
             .setDesc($msg("Reset the remote storage size threshold and check the remote storage size again."))
@@ -136,7 +166,7 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
         new Setting(paneEl).autoWireToggle("writeLogToTheFile");
     });
 
-    void addPanel(paneEl, "Scram Switches").then((paneEl) => {
+    void addPanel(paneEl, $msg("Scram Switches")).then((paneEl) => {
         new Setting(paneEl).autoWireToggle("suspendFileWatching");
         this.addOnSaved("suspendFileWatching", () => this.services.appLifecycle.askRestart());
 
@@ -144,7 +174,7 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
         this.addOnSaved("suspendParseReplicationResult", () => this.services.appLifecycle.askRestart());
     });
 
-    void addPanel(paneEl, "Recovery and Repair").then((paneEl) => {
+    void addPanel(paneEl, $msg("Recovery and Repair")).then((paneEl) => {
         const resultArea = paneEl.createDiv({ text: "", cls: "sls-repair-results" });
         type RepairMenuAction = {
             title: string;
@@ -1071,13 +1101,15 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                     })
             );
         new Setting(paneEl)
-            .setName("Resolve All conflicted files by the newer one")
+            .setName($msg("Resolve All conflicted files by the newer one"))
             .setDesc(
-                "Resolve all conflicted files by the newer one. Caution: This will overwrite the older one, and cannot resurrect the overwritten one."
+                $msg(
+                    "Resolve all conflicted files by the newer one. Caution: This will overwrite the older one, and cannot resurrect the overwritten one."
+                )
             )
             .addButton((button) =>
                 button
-                    .setButtonText("Resolve All")
+                    .setButtonText($msg("Resolve All"))
                     .setCta()
                     .onClick(async () => {
                         const confirmed =
@@ -1097,11 +1129,11 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                     })
             );
         new Setting(paneEl)
-            .setName("Check and convert non-path-obfuscated files")
+            .setName($msg("Check and convert non-path-obfuscated files"))
             .setDesc("")
             .addButton((button) =>
                 setButtonDestructiveState(button)
-                    .setButtonText("Perform")
+                    .setButtonText($msg("Perform"))
                     .setDisabled(false)
                     .onClick(async () => {
                         for await (const docName of this.core.localDatabase.findAllDocNames()) {
@@ -1174,10 +1206,10 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                     })
             );
     });
-    void addPanel(paneEl, "Reset").then((paneEl) => {
-        new Setting(paneEl).setName("Back to non-configured").addButton((button) =>
+    void addPanel(paneEl, $msg("Reset")).then((paneEl) => {
+        new Setting(paneEl).setName($msg("Back to non-configured")).addButton((button) =>
             button
-                .setButtonText("Back")
+                .setButtonText($msg("Back"))
                 .setDisabled(false)
                 .onClick(async () => {
                     this.editingSettings.isConfigured = false;
@@ -1186,9 +1218,9 @@ export function paneHatch(this: ObsidianLiveSyncSettingTab, paneEl: HTMLElement,
                 })
         );
 
-        new Setting(paneEl).setName("Delete all customization sync data").addButton((button) =>
+        new Setting(paneEl).setName($msg("Delete all customization sync data")).addButton((button) =>
             setButtonDestructiveState(button)
-                .setButtonText("Delete")
+                .setButtonText($msg("Delete"))
                 .setDisabled(false)
                 .onClick(async () => {
                     Logger(`Deleting customization sync data`, LOG_LEVEL_NOTICE);

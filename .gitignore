@@ -29,8 +29,17 @@ cov_profile/**
 
 coverage
 src/apps/cli/dist/*
+_cli-bundle/
 src/apps/webapp/playwright-report/
 src/apps/webapp/test-results/
 _testdata/**
 utils/bench/splitResults.csv
 .eslintcache
+
+# Local Vaults, device credentials, and operator exports.
+**/.obsidian/
+*.token
+*-recovery-*.txt
+gateway-hpke.json
+service-hpke.json
+secureweb-diagnostics.log
