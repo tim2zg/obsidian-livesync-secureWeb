@@ -1,3 +1,5 @@
+import PouchDB from "pouchdb-core";
+import HttpAdapter from "pouchdb-adapter-http";
 import { describe, expect, it, vi } from "vitest";
 import { withBoundedCouchDBReads } from "./batchReads";
 
@@ -36,6 +38,29 @@ describe("bounded encrypted CouchDB reads", () => {
         expect(response.headers.has("etag")).toBe(false);
         expect(response.headers.has("content-length")).toBe(false);
     });
+    it("handles PouchDB's actual allDocs request", async () => {
+        const env = fixture();
+        const Database = PouchDB.plugin(HttpAdapter);
+        const db = new Database(origin + "/vault", { skip_setup: true, fetch: env.fetch });
+        try {
+            const keys = Array.from({ length: 100 }, (_, n) => `chunk-${n}`);
+            const result = await db.allDocs({ keys, include_docs: true });
+            expect(result.rows.map(row => row.key)).toEqual(keys);
+            expect(env.calls).toHaveLength(25);
+            expect(env.calls.every(call => call.items.length <= 4)).toBe(true);
+        } finally { await db.close(); }
+    });
+
+    it("batches explicit skip=0 and descending=false defaults without changing pagination", async () => {
+        const env = fixture(); const keys = ["a", "b", "c", "d", "e"];
+        const response = await env.fetch(origin + "/vault/_all_docs?skip=0&descending=false", {
+            method: "POST", body: JSON.stringify({ keys }),
+        });
+        expect(response.status).toBe(200);
+        expect((await response.json()).rows.map((row: { key: string }) => row.key)).toEqual(keys);
+        expect(env.calls).toHaveLength(2);
+    });
+
     it("supports GET keys and bulk_get revision descriptors", async () => {
         const env = fixture(); const keys = ["a", "b", "b", "missing", "e"];
         const get = await env.fetch(origin + "/vault/_all_docs?include_docs=true&keys=" + encodeURIComponent(JSON.stringify(keys)));

@@ -48,7 +48,10 @@ export function withBoundedCouchDBReads(fetchOne: typeof fetch): typeof fetch {
         const items = payload[field];
         if (!Array.isArray(items) || !items.length) return await fetchOne(input, init);
         // Pagination applies to the complete query, so leave those queries intact.
-        if (["skip", "limit", "descending"].some(key => url.searchParams.has(key) || key in payload)) {
+        const option = (key: string) => url.searchParams.get(key) ?? payload[key];
+        if (option("limit") !== null && option("limit") !== undefined
+            || Number(option("skip") ?? 0) !== 0
+            || option("descending") === true || option("descending") === "true") {
             return await fetchOne(input, init);
         }
         const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
