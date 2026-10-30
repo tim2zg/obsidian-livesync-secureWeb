@@ -12,6 +12,17 @@ Earlier releases remain available in the 1.0 release history, the 1.0 preview hi
 
 ## Unreleased
 
+## 1.0.40-secureweb.2
+
+30th October, 2026
+
+### SecureWeb synchronisation and rescans
+
+- **Fast rescan storage and database** visits every selected path and reuses confirmed unchanged file state after pending edits are saved. Files without sufficient evidence retain content checks; the existing full scan remains strict.
+- Startup uses the same guarded fast check by default. **Strict content check on startup** restores content verification on each launch. Fast checks can miss an unrecorded edit preserving both size and modification time.
+- Updating each configured device adds temporary-download, dependency-cache, and generated Manim-media exclusions once, preserving existing selectors. Restart replays pending temporary-file events with those selectors; later selector edits are respected.
+- Updated the exact maintained Commonlib dependency to 0.2.2. PDF download preferences, database contents, and archived study notes are not reset by the update.
+
 ## 1.0.40-secureweb.1
 
 26th October, 2026

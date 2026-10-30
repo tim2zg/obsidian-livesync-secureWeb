@@ -118,7 +118,32 @@ export function useBasicCommandsFeature(host: BasicCommandsHost): void {
             checkCallback: (checking) => {
                 if (!services.setting.currentSettings().useAdvancedMode) return false;
                 if (!checking) {
-                    fireAndForget(() => services.vault.scanVault(true));
+                    fireAndForget(() => services.vault.scanVault(true, false, false, { strictContentCheck: true }));
+                }
+                return true;
+            },
+        });
+
+        services.API.addCommand({
+            id: "livesync-scan-files-fast",
+            name: "Fast rescan storage and database",
+            checkCallback: (checking) => {
+                if (!services.setting.currentSettings().useAdvancedMode) return false;
+                if (!checking) {
+                    fireAndForget(async () => {
+                        if (!(await services.fileProcessing.commitPendingFileEvents())) {
+                            log(
+                                "The rescan could not start because local file changes are still pending.",
+                                LOG_LEVEL_NOTICE
+                            );
+                            return;
+                        }
+                        log(
+                            "Fast rescan reuses confirmed unchanged file state. Use 'Scan storage and database again' to verify all file contents.",
+                            LOG_LEVEL_NOTICE
+                        );
+                        await services.vault.scanVault(true, false, false, { strictContentCheck: false });
+                    });
                 }
                 return true;
             },

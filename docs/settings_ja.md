@@ -447,6 +447,10 @@ Self-hosted LiveSyncはPouchDBを使用し、リモートと[このプロトコ�
 ご使用のすべてのデバイスでロックを解除した場合は、データベースのロックを解除することができます。  
 ただし、このまま放置しても問題はありません。
 
+### Fast rescans (SecureWeb fork)
+
+The SecureWeb fork also provides **Fast rescan storage and database** in Advanced mode. It commits pending edits and reuses confirmed unchanged revision, provenance, size, and modification-time evidence. Uncertain files receive content comparison. The existing **Scan storage and database again** command remains strict. Fast checks can miss an unrecorded edit preserving both size and modification time; use the strict command to check that case. **Strict content check on startup** (setting key: strictContentCheckOnStartup) enables strict startup checks on this device; it defaults to disabled.
+
 ### Verify and repair all files
 Vault内のファイルを全て読み込み直し、もし差分があったり、データベースから正常に読み込めなかったものに関して、データベースに反映します。
 

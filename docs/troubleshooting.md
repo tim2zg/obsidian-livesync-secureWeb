@@ -63,6 +63,12 @@ The **Synchronisation paused for compatibility review** dialogue opens after the
 
 Review the stated reason before continuing. When **Resume synchronisation** is available, first update every synchronising device, then use that action to record the current internal database version and restore the configured synchronisation behaviour. If the action is unavailable, the running installation is older than the recorded database or settings format. Update that installation instead of resetting the database merely to remove the warning.
 
+## Pending temporary downloads or slow full scans (SecureWeb fork)
+
+After updating this device, restart the plug-in once so stored file events are replayed with its selectors. The fork adds exclusions for temporary downloads, dependency caches, and generated Manim media once per configured device. It preserves existing selectors and respects subsequent edits. A real file-save failure still remains pending; the update does not acknowledge unsaved content as successful.
+
+For a routine full reconciliation, enable Advanced mode and run **Fast rescan storage and database**. It saves pending local edits before scanning every selected path. Confirmed unchanged revisions may reuse provenance, size, and exact modification time; uncertain files still receive content checks. The strict **Scan storage and database again** command remains available and detects unrecorded edits which preserve both size and modification time. Do not reset or rebuild a database to speed up either scan.
+
 ## Files are missing or excluded
 
 Check Obsidian's `Detect all file extensions`, LiveSync selectors, ignore files, file-size limits, modification-time limits, and Hidden File Sync rules. A filtered file is different from a file which reached the database but could not be reconstructed from its chunks.

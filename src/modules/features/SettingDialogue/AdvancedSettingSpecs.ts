@@ -18,6 +18,7 @@ export function createAdvancedSettingSpecGroups({
         {
             heading: "Local Database Tweak",
             items: [
+                { key: "strictContentCheckOnStartup", control: { type: "toggle", defaultValue: false } },
                 {
                     key: "chunkSplitterVersion",
                     control: { type: "dropdown", options: () => ChunkAlgorithmNames },

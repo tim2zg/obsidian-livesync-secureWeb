@@ -102,7 +102,7 @@ describe("ModuleLiveSyncMain", () => {
         const result = await ModuleLiveSyncMain.prototype._onLiveSyncReady.call(host as never);
 
         expect(result).toBe(false);
-        expect(initialiseDatabase).toHaveBeenCalledWith(false, false, false, true);
+        expect(initialiseDatabase).toHaveBeenCalledWith(false, false, false, true, { strictContentCheck: false });
         expect(log).toHaveBeenCalledWith("Ui.Common.LocalDatabaseInitialisationFailed", LOG_LEVEL_NOTICE);
     });
 
@@ -157,12 +157,13 @@ describe("ModuleLiveSyncMain", () => {
             settings: {
                 suspendFileWatching: false,
                 suspendParseReplicationResult: false,
+                strictContentCheckOnStartup: true,
             },
             _log: vi.fn(),
         };
 
         await ModuleLiveSyncMain.prototype._onLiveSyncReady.call(host as never);
 
-        expect(initialiseDatabase).toHaveBeenCalledWith(false, false, true, false);
+        expect(initialiseDatabase).toHaveBeenCalledWith(false, false, true, false, { strictContentCheck: true });
     });
 });

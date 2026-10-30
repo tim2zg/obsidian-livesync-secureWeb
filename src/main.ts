@@ -55,7 +55,13 @@ import { useStartupLifecycleFeature } from "./serviceFeatures/startupLifecycle";
 import { useJoinedDevicesFeature } from "./serviceFeatures/useJoinedDevices";
 import { useDatabaseDiagnosticsFeature } from "./serviceFeatures/useDatabaseDiagnostics";
 import { installGlobalSecureWebFetch } from "./secureweb/globalFetch";
-import { installSecureWebXhrShim, installSecureWebRequestUrlShim, setSecureWebSettingsProvider, registerGatewayHost } from "./secureweb/envelope";
+import { useSyncPerformanceDefaults } from "./serviceFeatures/syncPerformance";
+import {
+    installSecureWebXhrShim,
+    installSecureWebRequestUrlShim,
+    setSecureWebSettingsProvider,
+    registerGatewayHost,
+} from "./secureweb/envelope";
 
 export type LiveSyncCore = LiveSyncBaseCore<ObsidianServiceContext, LiveSyncCommands>;
 export default class ObsidianLiveSyncPlugin extends Plugin {
@@ -156,7 +162,9 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
         this.register(installGlobalSecureWebFetch(() => this));
         this.register(installSecureWebXhrShim(() => this.core?.settings));
         this.register(installSecureWebRequestUrlShim(() => this));
-        this.registerObsidianProtocolHandler("livesync-secureweb", (params) => { void this.handleSecureWebSetup(params); });
+        this.registerObsidianProtocolHandler("livesync-secureweb", (params) => {
+            void this.handleSecureWebSetup(params);
+        });
         // Maybe no more need to setNoticeClass, but for safety, set it in the constructor of the main plugin class.
         // TODO: remove this.
         setNoticeClass(Notice);
@@ -215,6 +223,7 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
                 useSetupURIFeature(core);
                 useSetupManagerHandlersFeature(core, setupManager);
                 useOfflineScanner(core);
+                useSyncPerformanceDefaults(core);
                 useRedFlagFeatures(core);
                 useCheckRemoteSize(core);
                 useInteractiveConflictResolutionFeature(core, (filename, conflictCheckResult) => {
@@ -319,7 +328,7 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
         // defaults (discovery remains the fallback).
         const serviceParam = (params.service || "").trim();
         if (/^[0-9a-fA-F-]{16,64}$/.test(serviceParam)) {
-            (settings).secureWebServiceId = serviceParam;
+            settings.secureWebServiceId = serviceParam;
         }
         settings.isConfigured = true;
         // Document ids in the shared database are canonical: lowercased
@@ -349,9 +358,7 @@ export default class ObsidianLiveSyncPlugin extends Plugin {
             await this.saveSettings();
             new Notice(`SecureWeb configured: ${normalizedGateway} → ${settings.couchDB_DBNAME}`);
         } catch (err) {
-            new Notice(
-                `SecureWeb setup save failed: ${err instanceof Error ? err.message : String(err)}`
-            );
+            new Notice(`SecureWeb setup save failed: ${err instanceof Error ? err.message : String(err)}`);
         }
     }
     override onunload(): void {

@@ -1,7 +1,7 @@
 {
     "name": "webpeer",
     "private": true,
-    "version": "1.0.40-secureweb.1-webpeer",
+    "version": "1.0.40-secureweb.2-webpeer",
     "type": "module",
     "scripts": {
         "dev": "vite",

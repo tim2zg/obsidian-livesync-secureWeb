@@ -989,6 +989,16 @@ If enabled, chunks will be split into no more than 100 items. However, dedupe is
 Setting key: useSegmenter
 If this enabled, chunks will be split into semantically meaningful segments. Not all platforms support this feature.
 
+#### Strict content check on startup
+
+Setting key: strictContentCheckOnStartup
+
+Disabled by default on this device. Startup may reuse unchanged file state when the recorded revision, provenance, exact modification time, and byte size agree, with no conflicts or unfinished file events. Uncertain files receive the ordinary content comparison. Enable this option to compare content even when that evidence agrees; it can increase startup time.
+
+In Advanced mode, the command **Fast rescan storage and database** applies the same guarded check to every selected path after committing pending local edits. The existing **Scan storage and database again** command retains strict content comparison. A fast scan can miss an unrecorded edit which preserves both size and modification time; use the strict command for that check. Neither command resets a database.
+
+The SecureWeb fork adds temporary-download, dependency-cache, and generated Manim-media exclusions once per configured device. Existing selector expressions are preserved. The expressions remain editable in Selector, and later user changes are not overwritten on restart. This does not delete existing files, change PDF download preferences, or exclude archived study notes.
+
 ### 3. Transfer Tweak
 
 #### Fetch chunks on demand

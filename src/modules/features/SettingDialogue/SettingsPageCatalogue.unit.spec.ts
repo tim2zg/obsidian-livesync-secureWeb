@@ -84,6 +84,7 @@ describe("settings page catalogue", () => {
 
         expect(keys).toEqual([
             "hashCacheMaxCount",
+            "strictContentCheckOnStartup",
             "chunkSplitterVersion",
             "customChunkSize",
             "pathNormalizationVersion",

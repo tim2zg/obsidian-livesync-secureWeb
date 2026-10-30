@@ -116,6 +116,7 @@ describe("useBasicCommandsFeature", () => {
             "livesync-toggle",
             "livesync-suspendall",
             "livesync-scan-files",
+            "livesync-scan-files-fast",
             "livesync-runbatch",
             "livesync-abortsync",
         ]);
@@ -198,7 +199,9 @@ describe("useBasicCommandsFeature", () => {
         fixture.getCommand("livesync-scan-files").checkCallback?.(false);
         fixture.getCommand("livesync-abortsync").checkCallback?.(false);
         await vi.waitFor(() => {
-            expect(fixture.services.vault.scanVault).toHaveBeenCalledWith(true);
+            expect(fixture.services.vault.scanVault).toHaveBeenCalledWith(true, false, false, {
+                strictContentCheck: true,
+            });
             expect(fixture.services.replication.stopActiveTransfer).toHaveBeenCalledOnce();
         });
     });
@@ -226,6 +229,41 @@ describe("useBasicCommandsFeature", () => {
             storageAccess: fixture.serviceModules.storageAccess,
         });
         expect(adapter).not.toBe(fixture.host);
+    });
+
+    it("flushes accepted edits before starting an explicitly fast scan", async () => {
+        const fixture = createFixture();
+        await initialise(fixture);
+        const command = fixture.getCommand("livesync-scan-files-fast");
+        expect(command.checkCallback?.(true)).toBe(false);
+        fixture.settings.useAdvancedMode = true;
+        expect(command.checkCallback?.(true)).toBe(true);
+        expect(fixture.services.fileProcessing.commitPendingFileEvents).not.toHaveBeenCalled();
+        command.checkCallback?.(false);
+        await vi.waitFor(() =>
+            expect(fixture.services.vault.scanVault).toHaveBeenCalledWith(true, false, false, {
+                strictContentCheck: false,
+            })
+        );
+        expect(fixture.services.fileProcessing.commitPendingFileEvents.mock.invocationCallOrder[0]).toBeLessThan(
+            fixture.services.vault.scanVault.mock.invocationCallOrder[0]
+        );
+    });
+
+    it("does not start a fast scan when pending edits cannot be saved", async () => {
+        const fixture = createFixture();
+        await initialise(fixture);
+        fixture.settings.useAdvancedMode = true;
+        fixture.services.fileProcessing.commitPendingFileEvents.mockResolvedValue(false);
+        fixture.getCommand("livesync-scan-files-fast").checkCallback?.(false);
+        await vi.waitFor(() =>
+            expect(fixture.api.addLog).toHaveBeenCalledWith(
+                "The rescan could not start because local file changes are still pending.",
+                expect.anything(),
+                ""
+            )
+        );
+        expect(fixture.services.vault.scanVault).not.toHaveBeenCalled();
     });
 
     it("commits pending file events from the batch command", async () => {

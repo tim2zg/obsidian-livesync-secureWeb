@@ -17,7 +17,7 @@ const rangeMessages = {
 };
 
 describe("Advanced setting specifications", () => {
-    it("lists only the ten controls currently exposed by the Advanced page", () => {
+    it("lists only the controls currently exposed by the Advanced page", () => {
         const groups = createAdvancedSettingSpecGroups({ isCouchDB: () => true });
 
         expect(groups.map(({ heading }) => heading)).toEqual([
@@ -28,6 +28,7 @@ describe("Advanced setting specifications", () => {
         ]);
         expect(groups.flatMap(({ items }) => items.map(({ key }) => key))).toEqual([
             "hashCacheMaxCount",
+            "strictContentCheckOnStartup",
             "chunkSplitterVersion",
             "customChunkSize",
             "pathNormalizationVersion",

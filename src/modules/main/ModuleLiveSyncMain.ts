@@ -50,7 +50,8 @@ export class ModuleLiveSyncMain extends AbstractModule {
             false,
             false,
             ignoreSuspending,
-            continueOnFileFailure
+            continueOnFileFailure,
+            { strictContentCheck: this.settings.strictContentCheckOnStartup === true }
         );
         if (initialisationResult === VaultScanResults.FAILED) {
             this._log($msg("Ui.Common.LocalDatabaseInitialisationFailed"), LOG_LEVEL_NOTICE);
