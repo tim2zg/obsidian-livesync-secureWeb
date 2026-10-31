@@ -20,6 +20,7 @@ import type { ReplicatorInstance } from "@vrtmrz/livesync-commonlib/replication"
 import { delay } from "@vrtmrz/livesync-commonlib/compat/common/utils";
 import { isNotFoundError } from "@vrtmrz/livesync-commonlib/compat/common/utils.doc";
 import { ensureLocalDatabaseMaintenancePrerequisites } from "./maintenancePrerequisites";
+import { withMaintenanceReplication } from "./maintenanceReplication";
 // import { _requestToCouchDB } from "@/common/utils";
 const DB_KEY_SEQ = "gc-seq";
 const DB_KEY_CHUNK_SET = "chunk-set";
@@ -55,6 +56,7 @@ function canRunCouchDBGarbageCollection(
 }
 
 export class LocalDatabaseMaintenance extends LiveSyncCommands {
+    private garbageCollectionRunning = false;
     onunload(): void {
         // NO OP.
     }
@@ -641,9 +643,30 @@ Success: ${successCount}, Errored: ${errored}`;
     //     }
     // }
     async gcv3() {
-        const replicator = this.core.replicator;
-        if (this.settings.remoteType !== REMOTE_COUCHDB || !canRunCouchDBGarbageCollection(replicator)) return;
-        if (!(await this.ensureAvailable("Garbage Collection"))) return;
+        if (this.settings.remoteType !== REMOTE_COUCHDB) return;
+        if (this.garbageCollectionRunning) {
+            this._notice("Garbage Collection is already running.");
+            return;
+        }
+        this.garbageCollectionRunning = true;
+        try {
+            if (!(await this.ensureAvailable("Garbage Collection"))) return;
+            await withMaintenanceReplication(this.services, async (replicator) => {
+                if (!canRunCouchDBGarbageCollection(replicator)) {
+                    this._notice("The active replicator does not support Garbage Collection.");
+                    return;
+                }
+                await this.performGarbageCollection(replicator);
+            });
+        } catch (error) {
+            this._notice("Garbage Collection or resuming synchronisation failed. Check the log for details.");
+            this._log(error, LOG_LEVEL_VERBOSE);
+        } finally {
+            this.garbageCollectionRunning = false;
+        }
+    }
+
+    private async performGarbageCollection(replicator: CouchDBGarbageCollectionReplicator) {
         // Start one-shot replication to ensure all changes are synced before GC.
         const r0 = await replicator.openOneShotReplication(this.settings, false, false, "sync");
         if (!r0) {

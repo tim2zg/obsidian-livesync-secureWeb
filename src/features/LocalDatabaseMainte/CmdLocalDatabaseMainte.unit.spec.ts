@@ -63,6 +63,26 @@ function createPrerequisites(settingsOverride: Partial<typeof DEFAULT_SETTINGS> 
     return { settings, askSelectStringDialogue, applyPartial };
 }
 
+function maintenanceServices(replicator: object) {
+    let suspended = false;
+    return {
+        appLifecycle: {
+            isSuspended: vi.fn(() => suspended),
+            setSuspended: vi.fn((value: boolean) => {
+                suspended = value;
+            }),
+        },
+        replication: { stopActiveTransfer: vi.fn(async () => ({ status: "completed" })) },
+        fileProcessing: { commitPendingFileEvents: vi.fn(async () => true) },
+        replicator: {
+            runWithActiveReplicatorContext: vi.fn(async (task: (context: { replicator: object }) => unknown) =>
+                task({ replicator })
+            ),
+        },
+        control: { applySettings: vi.fn(async () => undefined) },
+    };
+}
+
 describe("LocalDatabaseMaintenance prerequisites", () => {
     it("shows Garbage Collection only in applicable Edge Case mode", () => {
         const commands: Array<{
@@ -222,6 +242,87 @@ describe("LocalDatabaseMaintenance prerequisites", () => {
 });
 
 describe("LocalDatabaseMaintenance Garbage Collection V3", () => {
+    it("hands an idle continuous controller to pre-sync before inspecting devices", async () => {
+        let continuousControllerExists = true;
+        const replicator = {
+            openOneShotReplication: vi.fn(async () => !continuousControllerExists),
+            getConnectedDeviceList: vi.fn(async () => ({ accepted_nodes: [], node_info: {} })),
+        };
+        const services = maintenanceServices(replicator);
+        services.replication.stopActiveTransfer.mockImplementation(async () => {
+            continuousControllerExists = false;
+            return { status: "completed" };
+        });
+        const maintenance = Object.create(LocalDatabaseMaintenance.prototype) as LocalDatabaseMaintenance;
+        const allChunks = vi.fn();
+        Object.assign(maintenance, {
+            core: { settings: { ...DEFAULT_SETTINGS, remoteType: REMOTE_COUCHDB, liveSync: true }, services, replicator },
+            localDatabase: { allChunks },
+            _notice: vi.fn(),
+            _log: vi.fn(),
+        });
+        vi.spyOn(maintenance, "ensureAvailable").mockResolvedValue(true);
+        await maintenance.gcv3();
+        expect(replicator.openOneShotReplication).toHaveBeenCalledOnce();
+        expect(replicator.getConnectedDeviceList).toHaveBeenCalledOnce();
+        expect(allChunks).not.toHaveBeenCalled();
+        expect(services.replication.stopActiveTransfer.mock.invocationCallOrder[0]).toBeLessThan(
+            replicator.openOneShotReplication.mock.invocationCallOrder[0]
+        );
+        expect(services.control.applySettings).toHaveBeenCalledOnce();
+    });
+
+    it("does not inspect or delete chunks after a failed pre-sync and restores automatic sync", async () => {
+        const maintenance = Object.create(LocalDatabaseMaintenance.prototype) as LocalDatabaseMaintenance;
+        const replicator = {
+            openOneShotReplication: vi.fn(async () => false),
+            getConnectedDeviceList: vi.fn(),
+        };
+        const services = maintenanceServices(replicator);
+        const allChunks = vi.fn();
+        const bulkDocs = vi.fn();
+        const notice = vi.fn();
+        Object.assign(maintenance, {
+            core: { settings: { ...DEFAULT_SETTINGS, remoteType: REMOTE_COUCHDB }, services },
+            localDatabase: { allChunks, localDatabase: { bulkDocs } },
+            _notice: notice,
+            _log: vi.fn(),
+        });
+        vi.spyOn(maintenance, "ensureAvailable").mockResolvedValue(true);
+        await maintenance.gcv3();
+        expect(replicator.openOneShotReplication).toHaveBeenCalledOnce();
+        expect(replicator.getConnectedDeviceList).not.toHaveBeenCalled();
+        expect(allChunks).not.toHaveBeenCalled();
+        expect(bulkDocs).not.toHaveBeenCalled();
+        expect(notice).toHaveBeenCalledWith(
+            "Failed to start one-shot replication before Garbage Collection. Garbage Collection Cancelled."
+        );
+        expect(services.appLifecycle.isSuspended()).toBe(false);
+        expect(services.control.applySettings).toHaveBeenCalledOnce();
+    });
+
+    it("rejects a duplicate request while the first workflow is waiting for prerequisites", async () => {
+        const maintenance = Object.create(LocalDatabaseMaintenance.prototype) as LocalDatabaseMaintenance;
+        const notice = vi.fn();
+        let finishPrerequisites!: (value: boolean) => void;
+        Object.assign(maintenance, {
+            core: { settings: { ...DEFAULT_SETTINGS, remoteType: REMOTE_COUCHDB } },
+            _notice: notice,
+            _log: vi.fn(),
+        });
+        const prerequisites = vi.spyOn(maintenance, "ensureAvailable").mockReturnValueOnce(
+            new Promise<boolean>((resolve) => { finishPrerequisites = resolve; })
+        ).mockResolvedValue(false);
+        const first = maintenance.gcv3();
+        await maintenance.gcv3();
+        expect(notice).toHaveBeenCalledWith("Garbage Collection is already running.");
+        expect(prerequisites).toHaveBeenCalledOnce();
+        finishPrerequisites(false);
+        await first;
+        await maintenance.gcv3();
+        expect(prerequisites).toHaveBeenCalledTimes(2);
+    });
+
     it("does not report remote compaction as successful after its completion wait times out", async () => {
         const maintenance = Object.create(LocalDatabaseMaintenance.prototype) as LocalDatabaseMaintenance;
         const notice = vi.fn();
@@ -246,10 +347,7 @@ describe("LocalDatabaseMaintenance Garbage Collection V3", () => {
         await maintenance.compactDatabase();
 
         expect(notice).toHaveBeenCalledWith("Compaction on remote database timed out.", "gc-compact");
-        expect(notice).not.toHaveBeenCalledWith(
-            "Compaction on remote database completed successfully.",
-            "gc-compact"
-        );
+        expect(notice).not.toHaveBeenCalledWith("Compaction on remote database completed successfully.", "gc-compact");
         expect(remoteDatabase.close).toHaveBeenCalledOnce();
     });
 
@@ -301,6 +399,7 @@ describe("LocalDatabaseMaintenance Garbage Collection V3", () => {
                     remoteType: REMOTE_COUCHDB,
                 },
                 replicator,
+                services: maintenanceServices(replicator),
                 confirm: {
                     askSelectStringDialogue: vi.fn(async () => "Proceed Garbage Collection"),
                 },
@@ -321,9 +420,7 @@ describe("LocalDatabaseMaintenance Garbage Collection V3", () => {
 
         expect(allChunks).not.toHaveBeenCalled();
         expect(pushModes).toEqual(["sync"]);
-        expect(notice).toHaveBeenCalledWith(
-            "No connected device information found. Cancelling Garbage Collection."
-        );
+        expect(notice).toHaveBeenCalledWith("No connected device information found. Cancelling Garbage Collection.");
     });
 
     it("keeps chunks referenced by a live conflict revision and deletes only unreachable chunks", async () => {
@@ -400,6 +497,7 @@ describe("LocalDatabaseMaintenance Garbage Collection V3", () => {
                     remoteType: REMOTE_COUCHDB,
                 },
                 replicator,
+                services: maintenanceServices(replicator),
                 confirm: {
                     askSelectStringDialogue: vi.fn(async () => "Proceed Garbage Collection"),
                 },

@@ -12,6 +12,16 @@ Earlier releases remain available in the 1.0 release history, the 1.0 preview hi
 
 ## Unreleased
 
+## 1.0.40-secureweb.3
+
+31st October, 2026
+
+### Garbage Collection with LiveSync mode
+
+- Garbage Collection now stops the continuous transfer, saves pending local edits, and reserves the active provider before its initial one-shot synchronisation. It no longer fails immediately with 'Replication is already in progress' while LiveSync mode is enabled.
+- Automatic transfers remain paused until maintenance exits. Completion, cancellation, and failure restore the previous synchronisation mode; a pre-existing suspension remains active. Duplicate Garbage Collection requests are rejected.
+- The initial sync, device-progress inspection, user confirmation, conflict-aware chunk protection, final push, and compaction checks remain required.
+
 ## 1.0.40-secureweb.2
 
 30th October, 2026

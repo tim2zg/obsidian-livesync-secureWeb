@@ -15,6 +15,8 @@ The operation requires **Fetch chunks on demand** to be off so that its local re
 
 ## Workflow
 
+Automatic replication is temporarily suspended while maintenance owns the active provider. It stops the continuous controller and saves pending local file edits before the initial one-shot synchronisation. New typed transfers are fenced until maintenance releases the provider. The previous synchronisation mode is restored after completion, cancellation, or failure; a pre-existing suspension stays in effect. Duplicate Garbage Collection requests are rejected while the first workflow is active.
+
 After the user starts Garbage Collection V3, LiveSync:
 
 1. completes a one-shot bidirectional CouchDB synchronisation;

@@ -6,9 +6,12 @@ import replication from "pouchdb-replication";
 
 vi.mock("@/features/LiveSyncCommands", () => ({
     LiveSyncCommands: class LiveSyncCommands {
-        core!: { settings: unknown };
+        core!: { settings: unknown; services: unknown };
         get settings() {
             return this.core.settings;
+        }
+        get services() {
+            return this.core.services;
         }
     },
 }));
@@ -190,6 +193,17 @@ describe("LocalDatabaseMaintenance Garbage Collection V3 with CouchDB", () => {
                         remoteType: REMOTE_COUCHDB,
                     },
                     replicator,
+                    services: {
+                        appLifecycle: { isSuspended: () => false, setSuspended: vi.fn() },
+                        replication: { stopActiveTransfer: async () => ({ status: "completed" }) },
+                        fileProcessing: { commitPendingFileEvents: async () => true },
+                        replicator: {
+                            runWithActiveReplicatorContext: async (
+                                task: (context: { replicator: typeof replicator }) => unknown
+                            ) => task({ replicator }),
+                        },
+                        control: { applySettings: async () => undefined },
+                    },
                     confirm: {
                         askSelectStringDialogue: vi.fn(() => Promise.resolve("Proceed Garbage Collection")),
                     },

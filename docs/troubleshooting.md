@@ -221,6 +221,8 @@ Browser security errors, particularly CORS failures, may reach the plug-in only 
 
 ## The database remains large after files are deleted
 
+If Garbage Collection reports that its initial one-shot replication failed and the preceding log says `Replication is already in progress`, update the SecureWeb fork to 1.0.40-secureweb.3 or later. That release coordinates maintenance with the existing continuous connection and restores the previous synchronisation mode after the workflow exits. It retains the device-progress checks and confirmation before collection.
+
 LiveSync stores file metadata, chunks, revision history, conflicts, deletions, and tombstones. Deleting or shortening a file therefore does not immediately remove every object which once represented it.
 
 Garbage Collection V3 can remove unreferenced chunks from a healthy CouchDB setup, but it is appropriate only when the Vault and local database are healthy and all relevant devices have synchronised. Current files and conflict branches protect their required chunks; an ordinary superseded revision does not. Tombstones and retained metadata are not free, so Garbage Collection does not guarantee a minimal database. Review the [Garbage Collection V3 specification](specs_garbage_collection.md) before using it.
