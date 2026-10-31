@@ -256,7 +256,11 @@ describe("LocalDatabaseMaintenance Garbage Collection V3", () => {
         const maintenance = Object.create(LocalDatabaseMaintenance.prototype) as LocalDatabaseMaintenance;
         const allChunks = vi.fn();
         Object.assign(maintenance, {
-            core: { settings: { ...DEFAULT_SETTINGS, remoteType: REMOTE_COUCHDB, liveSync: true }, services, replicator },
+            core: {
+                settings: { ...DEFAULT_SETTINGS, remoteType: REMOTE_COUCHDB, liveSync: true },
+                services,
+                replicator,
+            },
             localDatabase: { allChunks },
             _notice: vi.fn(),
             _log: vi.fn(),
@@ -310,9 +314,14 @@ describe("LocalDatabaseMaintenance Garbage Collection V3", () => {
             _notice: notice,
             _log: vi.fn(),
         });
-        const prerequisites = vi.spyOn(maintenance, "ensureAvailable").mockReturnValueOnce(
-            new Promise<boolean>((resolve) => { finishPrerequisites = resolve; })
-        ).mockResolvedValue(false);
+        const prerequisites = vi
+            .spyOn(maintenance, "ensureAvailable")
+            .mockReturnValueOnce(
+                new Promise<boolean>((resolve) => {
+                    finishPrerequisites = resolve;
+                })
+            )
+            .mockResolvedValue(false);
         const first = maintenance.gcv3();
         await maintenance.gcv3();
         expect(notice).toHaveBeenCalledWith("Garbage Collection is already running.");

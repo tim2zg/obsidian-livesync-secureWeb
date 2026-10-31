@@ -195,14 +195,14 @@ describe("LocalDatabaseMaintenance Garbage Collection V3 with CouchDB", () => {
                     replicator,
                     services: {
                         appLifecycle: { isSuspended: () => false, setSuspended: vi.fn() },
-                        replication: { stopActiveTransfer: async () => ({ status: "completed" }) },
-                        fileProcessing: { commitPendingFileEvents: async () => true },
+                        replication: { stopActiveTransfer: () => Promise.resolve({ status: "completed" }) },
+                        fileProcessing: { commitPendingFileEvents: () => Promise.resolve(true) },
                         replicator: {
                             runWithActiveReplicatorContext: async (
                                 task: (context: { replicator: typeof replicator }) => unknown
-                            ) => task({ replicator }),
+                            ) => await task({ replicator }),
                         },
-                        control: { applySettings: async () => undefined },
+                        control: { applySettings: () => Promise.resolve() },
                     },
                     confirm: {
                         askSelectStringDialogue: vi.fn(() => Promise.resolve("Proceed Garbage Collection")),
